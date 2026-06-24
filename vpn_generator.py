@@ -39,7 +39,7 @@ class GeneratedCredential:
     access_link: str | None
 
 
-def _wireguard_keypair() -> tuple[str, str]:
+def wireguard_keypair() -> tuple[str, str]:
     """Return a (private_key, public_key) WireGuard keypair, base64 encoded."""
     private = X25519PrivateKey.generate()
     priv_bytes = private.private_bytes(
@@ -49,6 +49,29 @@ def _wireguard_keypair() -> tuple[str, str]:
     return (
         base64.b64encode(priv_bytes).decode(),
         base64.b64encode(pub_bytes).decode(),
+    )
+
+
+def wireguard_client_config(
+    client_private_key: str,
+    client_address: str,
+    server_public_key: str,
+    endpoint: str,
+    dns: str = "1.1.1.1, 8.8.8.8",
+    label: str = "VPN",
+) -> str:
+    """Build a WireGuard client .conf from already-allocated parameters."""
+    return (
+        f"# {label}\n"
+        "[Interface]\n"
+        f"PrivateKey = {client_private_key}\n"
+        f"Address = {client_address}\n"
+        f"DNS = {dns}\n\n"
+        "[Peer]\n"
+        f"PublicKey = {server_public_key}\n"
+        "AllowedIPs = 0.0.0.0/0, ::/0\n"
+        f"Endpoint = {endpoint}\n"
+        "PersistentKeepalive = 25\n"
     )
 
 
@@ -63,7 +86,7 @@ def _client_ip() -> str:
 
 
 def _wireguard_config(host: str, port: int, server_public_key: str | None, label: str) -> str:
-    client_priv, _client_pub = _wireguard_keypair()
+    client_priv, _client_pub = wireguard_keypair()
     server_pub = server_public_key or "<SERVER_PUBLIC_KEY>"
     return (
         f"# {label}\n"

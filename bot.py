@@ -32,6 +32,7 @@ import keyboards as kb
 from config import Config, load_config
 from database import Database, Server, Tariff
 from vpn_generator import generate
+from vpn_provisioner import ProvisionError, SSHTarget, WireGuardProvisioner
 
 logging.basicConfig(
     level=logging.INFO,
@@ -106,6 +107,39 @@ def _tariff_label(t: Tariff, currency: str) -> str:
     )
 
 
+def _ssh_target(config: Config, server: Server) -> SSHTarget:
+    return SSHTarget(
+        host=server.host,
+        user=config.wg_ssh_user,
+        port=config.wg_ssh_port,
+        key_path=config.wg_ssh_key or None,
+        password=config.wg_ssh_password or None,
+    )
+
+
+def _provision_wireguard(config: Config, server: Server, label: str) -> tuple[str, str, str | None]:
+    """Register a real WireGuard peer on ``server``.
+
+    Returns ``(config_text, access_link, peer_public_key)``. Raises
+    :class:`ProvisionError` if the server cannot be reached/updated.
+    """
+    if not server.public_key:
+        raise ProvisionError("server has no public key; add it via the install script output")
+    provisioner = WireGuardProvisioner(
+        ssh=_ssh_target(config, server),
+        interface=config.wg_interface,
+        subnet=config.wg_subnet,
+    )
+    result = provisioner.add_peer(
+        server_public_key=server.public_key,
+        endpoint_host=server.host,
+        endpoint_port=server.port,
+        dns=config.wg_dns,
+        label=label,
+    )
+    return result.client_config, None, result.client_public_key
+
+
 async def _deliver_key(
     bot: Bot,
     chat_id: int,
@@ -132,14 +166,29 @@ async def _deliver_key(
 
     label = f"VPN-{server.name}-{user_id}"
     cred = generate(server.protocol, server.host, server.port, server.public_key, label)
+    config_text = cred.config
+    access_link = cred.access_link
+    peer_public_key: str | None = None
+
+    # When enabled, register a real peer on the WireGuard server over SSH so the
+    # issued config actually works. Fall back to the offline config on failure.
+    if config.wg_auto_provision and cred.protocol.lower() == "wireguard":
+        try:
+            config_text, access_link, peer_public_key = await asyncio.to_thread(
+                _provision_wireguard, config, server, label
+            )
+        except ProvisionError as exc:
+            logger.error("WireGuard provisioning failed for server %s: %s", server.id, exc)
+
     key_id = await db.add_key(
         user_id=user_id,
         server_id=server.id,
         tariff_id=tariff.id if tariff else None,
         protocol=cred.protocol,
-        config=cred.config,
-        access_link=cred.access_link,
+        config=config_text,
+        access_link=access_link,
         days=days,
+        peer_public_key=peer_public_key,
     )
 
     if record_payment:
@@ -156,7 +205,7 @@ async def _deliver_key(
         f"✅ <b>Ваш VPN ключ готов!</b>\n\n"
         f"Сервер: {html.escape(server.name)} ({html.escape(server.protocol)})\n"
         f"Срок действия: {days} дн.\n\n"
-        f"<pre>{html.escape(cred.config)}</pre>"
+        f"<pre>{html.escape(config_text)}</pre>"
     )
     await bot.send_message(chat_id, text)
 
@@ -169,7 +218,7 @@ async def _deliver_key(
     if filename:
         await bot.send_document(
             chat_id,
-            BufferedInputFile(cred.config.encode(), filename=filename),
+            BufferedInputFile(config_text.encode(), filename=filename),
             caption="Импортируйте этот файл в приложение VPN.",
         )
     return True

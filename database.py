@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS vpn_keys (
     created_at  TEXT NOT NULL,
     expires_at  TEXT NOT NULL,
     is_active   INTEGER NOT NULL DEFAULT 1,
+    peer_public_key TEXT,
     FOREIGN KEY (user_id) REFERENCES users (id),
     FOREIGN KEY (server_id) REFERENCES servers (id),
     FOREIGN KEY (tariff_id) REFERENCES tariffs (id)
@@ -122,6 +123,7 @@ class VpnKey:
     created_at: str
     expires_at: str
     is_active: bool
+    peer_public_key: Optional[str] = None
     server_name: Optional[str] = None
 
     @property
@@ -148,7 +150,15 @@ class Database:
         self._db.row_factory = aiosqlite.Row
         await self._db.executescript(SCHEMA)
         await self._db.execute("PRAGMA foreign_keys = ON")
+        await self._migrate()
         await self._db.commit()
+
+    async def _migrate(self) -> None:
+        """Apply lightweight, additive migrations to pre-existing databases."""
+        async with self.db.execute("PRAGMA table_info(vpn_keys)") as cur:
+            cols = {row["name"] for row in await cur.fetchall()}
+        if "peer_public_key" not in cols:
+            await self.db.execute("ALTER TABLE vpn_keys ADD COLUMN peer_public_key TEXT")
 
     async def close(self) -> None:
         if self._db is not None:
@@ -305,14 +315,16 @@ class Database:
         config: str,
         access_link: str | None,
         days: int,
+        peer_public_key: str | None = None,
     ) -> int:
         now = _utcnow()
         expires = now + timedelta(days=days)
         cur = await self.db.execute(
             """
             INSERT INTO vpn_keys
-                (user_id, server_id, tariff_id, protocol, config, access_link, created_at, expires_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (user_id, server_id, tariff_id, protocol, config, access_link,
+                 created_at, expires_at, peer_public_key)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 user_id,
@@ -323,6 +335,7 @@ class Database:
                 access_link,
                 _iso(now),
                 _iso(expires),
+                peer_public_key,
             ),
         )
         await self.db.commit()
@@ -341,6 +354,7 @@ class Database:
             created_at=row["created_at"],
             expires_at=row["expires_at"],
             is_active=bool(row["is_active"]),
+            peer_public_key=row["peer_public_key"] if "peer_public_key" in row.keys() else None,
             server_name=row["server_name"] if "server_name" in row.keys() else None,
         )
 

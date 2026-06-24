@@ -33,6 +33,15 @@ class Config:
     payment_provider_token: str = ""
     currency: str = "RUB"
     database_path: str = "vpn_bot.db"
+    # WireGuard auto-provisioning over SSH
+    wg_auto_provision: bool = False
+    wg_ssh_user: str = "root"
+    wg_ssh_port: int = 22
+    wg_ssh_key: str = ""
+    wg_ssh_password: str = ""
+    wg_interface: str = "wg0"
+    wg_subnet: str = "10.66.66.0/24"
+    wg_dns: str = "1.1.1.1, 8.8.8.8"
 
     @property
     def demo_payments(self) -> bool:
@@ -58,10 +67,21 @@ def load_config() -> Config:
             "(get it from @userinfobot)."
         )
 
+    def _flag(name: str) -> bool:
+        return os.getenv(name, "").strip().lower() in ("1", "true", "yes", "on")
+
     return Config(
         bot_token=bot_token,
         admin_ids=admin_ids,
         payment_provider_token=os.getenv("PAYMENT_PROVIDER_TOKEN", "").strip(),
         currency=os.getenv("CURRENCY", "RUB").strip() or "RUB",
         database_path=os.getenv("DATABASE_PATH", "vpn_bot.db").strip() or "vpn_bot.db",
+        wg_auto_provision=_flag("WG_AUTO_PROVISION"),
+        wg_ssh_user=os.getenv("WG_SSH_USER", "root").strip() or "root",
+        wg_ssh_port=int(os.getenv("WG_SSH_PORT", "22").strip() or "22"),
+        wg_ssh_key=os.getenv("WG_SSH_KEY", "").strip(),
+        wg_ssh_password=os.getenv("WG_SSH_PASSWORD", ""),
+        wg_interface=os.getenv("WG_INTERFACE", "wg0").strip() or "wg0",
+        wg_subnet=os.getenv("WG_SUBNET", "10.66.66.0/24").strip() or "10.66.66.0/24",
+        wg_dns=os.getenv("WG_DNS", "1.1.1.1, 8.8.8.8").strip() or "1.1.1.1, 8.8.8.8",
     )
