@@ -50,7 +50,32 @@ DATABASE_PATH=vpn_bot.db
 ### Получение ADMIN_ID
 1. Откройте [@userinfobot](https://t.me/userinfobot), отправьте любое сообщение, скопируйте ваш `Id`.
 
-## 🎯 Запуск
+## ⚡ Установка на сервер одной командой
+
+На чистом сервере (Ubuntu/Debian, нужен root) скрипт сам поставит зависимости, создаст venv, спросит `BOT_TOKEN`/`ADMIN_ID`, настроит systemd-сервис и запустит бота:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/curcan-riwpyk-nikbE7/bot_vpn-/main/install_bot.sh -o install_bot.sh
+sudo bash install_bot.sh
+```
+
+Без вопросов (передать значения сразу):
+
+```bash
+sudo BOT_TOKEN=123:ABC ADMIN_ID=123456 bash install_bot.sh
+```
+
+После установки бот работает как сервис `vpn-bot`:
+
+```bash
+systemctl status vpn-bot      # статус
+journalctl -u vpn-bot -f      # логи
+systemctl restart vpn-bot     # перезапуск
+```
+
+> Не запускайте `python bot.py` вручную, пока работает сервис — Telegram разрешает только один процесс на токен, иначе будет ошибка `terminated by other getUpdates request`.
+
+## 🎯 Запуск (вручную)
 
 ```bash
 python bot.py
@@ -155,6 +180,7 @@ vpn-telegram-bot/
 ├── vpn_generator.py   # Генерация ключей/конфигов по протоколам
 ├── vpn_provisioner.py # Регистрация WireGuard-peer на сервере (локально / по SSH)
 ├── xui_provisioner.py # Клиент API панели 3X-UI (создание клиента + vless-ссылка)
+├── install_bot.sh     # Установщик самого бота на сервер (venv + systemd) в одну команду
 ├── install_vpn.sh     # Установщик WireGuard-сервера (Ubuntu/Debian)
 ├── keyboards.py       # Inline-клавиатуры (пользователь + админ)
 ├── requirements.txt   # Зависимости
