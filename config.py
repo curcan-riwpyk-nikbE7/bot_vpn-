@@ -42,6 +42,9 @@ class Config:
     wg_interface: str = "wg0"
     wg_subnet: str = "10.66.66.0/24"
     wg_dns: str = "1.1.1.1, 8.8.8.8"
+    # 3X-UI panel provisioning
+    xui_flow: str = "xtls-rprx-vision"
+    xui_verify_ssl: bool = False
 
     @property
     def demo_payments(self) -> bool:
@@ -84,4 +87,6 @@ def load_config() -> Config:
         wg_interface=os.getenv("WG_INTERFACE", "wg0").strip() or "wg0",
         wg_subnet=os.getenv("WG_SUBNET", "10.66.66.0/24").strip() or "10.66.66.0/24",
         wg_dns=os.getenv("WG_DNS", "1.1.1.1, 8.8.8.8").strip() or "1.1.1.1, 8.8.8.8",
+        xui_flow=os.getenv("XUI_FLOW", "xtls-rprx-vision").strip(),
+        xui_verify_ssl=_flag("XUI_VERIFY_SSL"),
     )

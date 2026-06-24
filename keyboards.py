@@ -65,10 +65,12 @@ def admin_back() -> InlineKeyboardMarkup:
 def servers_menu(servers: list[Server]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="➕ Добавить сервер", callback_data="adm_addserver")
+    kb.button(text="➕ Добавить 3X-UI панель", callback_data="adm_addpanel")
     for s in servers:
         status = "🟢" if s.is_active else "🔴"
+        badge = "🛡️ " if s.is_panel else ""
         kb.button(
-            text=f"{status} {s.name} ({s.load_percent}%)",
+            text=f"{status} {badge}{s.name} ({s.load_percent}%)",
             callback_data=f"adm_server:{s.id}",
         )
     kb.button(text="⬅️ Админ-панель", callback_data="adm_back")

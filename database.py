@@ -25,7 +25,11 @@ CREATE TABLE IF NOT EXISTS servers (
     public_key      TEXT,
     max_connections INTEGER NOT NULL DEFAULT 100,
     is_active       INTEGER NOT NULL DEFAULT 1,
-    created_at      TEXT NOT NULL
+    created_at      TEXT NOT NULL,
+    panel_url       TEXT,
+    panel_user      TEXT,
+    panel_pass      TEXT,
+    inbound_id      INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS tariffs (
@@ -88,6 +92,15 @@ class Server:
     is_active: bool
     created_at: str
     load: int = 0
+    panel_url: Optional[str] = None
+    panel_user: Optional[str] = None
+    panel_pass: Optional[str] = None
+    inbound_id: Optional[int] = None
+
+    @property
+    def is_panel(self) -> bool:
+        """True for 3X-UI panel servers provisioned via the panel API."""
+        return bool(self.panel_url)
 
     @property
     def load_percent(self) -> int:
@@ -160,6 +173,17 @@ class Database:
         if "peer_public_key" not in cols:
             await self.db.execute("ALTER TABLE vpn_keys ADD COLUMN peer_public_key TEXT")
 
+        async with self.db.execute("PRAGMA table_info(servers)") as cur:
+            server_cols = {row["name"] for row in await cur.fetchall()}
+        for column, ddl in (
+            ("panel_url", "ALTER TABLE servers ADD COLUMN panel_url TEXT"),
+            ("panel_user", "ALTER TABLE servers ADD COLUMN panel_user TEXT"),
+            ("panel_pass", "ALTER TABLE servers ADD COLUMN panel_pass TEXT"),
+            ("inbound_id", "ALTER TABLE servers ADD COLUMN inbound_id INTEGER"),
+        ):
+            if column not in server_cols:
+                await self.db.execute(ddl)
+
     async def close(self) -> None:
         if self._db is not None:
             await self._db.close()
@@ -198,13 +222,31 @@ class Database:
         protocol: str,
         public_key: str | None,
         max_connections: int,
+        panel_url: str | None = None,
+        panel_user: str | None = None,
+        panel_pass: str | None = None,
+        inbound_id: int | None = None,
     ) -> int:
         cur = await self.db.execute(
             """
-            INSERT INTO servers (name, host, port, protocol, public_key, max_connections, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO servers
+                (name, host, port, protocol, public_key, max_connections, created_at,
+                 panel_url, panel_user, panel_pass, inbound_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (name, host, port, protocol, public_key, max_connections, _iso(_utcnow())),
+            (
+                name,
+                host,
+                port,
+                protocol,
+                public_key,
+                max_connections,
+                _iso(_utcnow()),
+                panel_url,
+                panel_user,
+                panel_pass,
+                inbound_id,
+            ),
         )
         await self.db.commit()
         return int(cur.lastrowid)
@@ -221,6 +263,10 @@ class Database:
             is_active=bool(row["is_active"]),
             created_at=row["created_at"],
             load=await self.server_load(row["id"]),
+            panel_url=row["panel_url"] if "panel_url" in row.keys() else None,
+            panel_user=row["panel_user"] if "panel_user" in row.keys() else None,
+            panel_pass=row["panel_pass"] if "panel_pass" in row.keys() else None,
+            inbound_id=row["inbound_id"] if "inbound_id" in row.keys() else None,
         )
 
     async def get_server(self, server_id: int) -> Optional[Server]:

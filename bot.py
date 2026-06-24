@@ -12,6 +12,8 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import uuid
+from urllib.parse import urlsplit
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -33,6 +35,7 @@ from config import Config, load_config
 from database import Database, Server, Tariff
 from vpn_generator import generate
 from vpn_provisioner import ProvisionError, SSHTarget, WireGuardProvisioner
+from xui_provisioner import XUIError, XUIPanel, XUIProvisioner
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,6 +53,16 @@ class AddServer(StatesGroup):
     port = State()
     protocol = State()
     public_key = State()
+    max_connections = State()
+
+
+class AddPanel(StatesGroup):
+    name = State()
+    panel_url = State()
+    username = State()
+    password = State()
+    inbound_id = State()
+    public_host = State()
     max_connections = State()
 
 
@@ -87,6 +100,15 @@ async def _safe_edit(call: CallbackQuery, text: str, markup=None) -> None:
 
 def _server_label(s: Server) -> str:
     status = "🟢 активен" if s.is_active else "🔴 отключён"
+    if s.is_panel:
+        return (
+            f"🛡️ <b>{html.escape(s.name)}</b> (3X-UI)\n"
+            f"Панель: <code>{html.escape(s.panel_url or '-')}</code>\n"
+            f"Адрес для клиентов: <code>{html.escape(s.host)}</code>\n"
+            f"Inbound ID: {s.inbound_id}\n"
+            f"Нагрузка: {s.load}/{s.max_connections} ({s.load_percent}%)\n"
+            f"Статус: {status}"
+        )
     return (
         f"🖥️ <b>{html.escape(s.name)}</b>\n"
         f"Адрес: <code>{html.escape(s.host)}:{s.port}</code>\n"
@@ -140,6 +162,28 @@ def _provision_wireguard(config: Config, server: Server, label: str) -> tuple[st
     return result.client_config, None, result.client_public_key
 
 
+async def _provision_xui(
+    config: Config, server: Server, user_id: int, days: int
+) -> tuple[str, str, str]:
+    """Create a client on a 3X-UI panel.
+
+    Returns ``(access_link, access_link, client_uuid)``. Raises :class:`XUIError`
+    if the panel rejects the request or is unreachable.
+    """
+    panel = XUIPanel(
+        base_url=server.panel_url or "",
+        username=server.panel_user or "",
+        password=server.panel_pass or "",
+        inbound_id=server.inbound_id or 0,
+        public_host=server.host or "",
+        verify_ssl=config.xui_verify_ssl,
+    )
+    provisioner = XUIProvisioner(panel)
+    email = f"{user_id}-{uuid.uuid4().hex[:8]}"
+    result = await provisioner.add_client(email=email, days=days, flow=config.xui_flow)
+    return result.access_link, result.access_link, result.client_uuid
+
+
 async def _deliver_key(
     bot: Bot,
     chat_id: int,
@@ -165,26 +209,45 @@ async def _deliver_key(
         return False
 
     label = f"VPN-{server.name}-{user_id}"
-    cred = generate(server.protocol, server.host, server.port, server.public_key, label)
-    config_text = cred.config
-    access_link = cred.access_link
     peer_public_key: str | None = None
 
-    # When enabled, register a real peer on the WireGuard server over SSH so the
-    # issued config actually works. Fall back to the offline config on failure.
-    if config.wg_auto_provision and cred.protocol.lower() == "wireguard":
+    if server.is_panel:
+        # 3X-UI panel: create a real client through the panel API. There is no
+        # usable offline fallback, so abort (without charging) if it fails.
         try:
-            config_text, access_link, peer_public_key = await asyncio.to_thread(
-                _provision_wireguard, config, server, label
+            config_text, access_link, peer_public_key = await _provision_xui(
+                config, server, user_id, days
             )
-        except ProvisionError as exc:
-            logger.error("WireGuard provisioning failed for server %s: %s", server.id, exc)
+            protocol = "3X-UI"
+        except XUIError as exc:
+            logger.error("3X-UI provisioning failed for server %s: %s", server.id, exc)
+            await bot.send_message(
+                chat_id,
+                "⚠️ Не удалось создать ключ на панели. Попробуйте позже или "
+                "обратитесь в поддержку.",
+            )
+            return False
+    else:
+        cred = generate(server.protocol, server.host, server.port, server.public_key, label)
+        config_text = cred.config
+        access_link = cred.access_link
+        protocol = cred.protocol
+
+        # When enabled, register a real peer on the WireGuard server over SSH so
+        # the issued config actually works. Fall back to offline config on failure.
+        if config.wg_auto_provision and protocol.lower() == "wireguard":
+            try:
+                config_text, access_link, peer_public_key = await asyncio.to_thread(
+                    _provision_wireguard, config, server, label
+                )
+            except ProvisionError as exc:
+                logger.error("WireGuard provisioning failed for server %s: %s", server.id, exc)
 
     key_id = await db.add_key(
         user_id=user_id,
         server_id=server.id,
         tariff_id=tariff.id if tariff else None,
-        protocol=cred.protocol,
+        protocol=protocol,
         config=config_text,
         access_link=access_link,
         days=days,
@@ -203,7 +266,7 @@ async def _deliver_key(
 
     text = (
         f"✅ <b>Ваш VPN ключ готов!</b>\n\n"
-        f"Сервер: {html.escape(server.name)} ({html.escape(server.protocol)})\n"
+        f"Сервер: {html.escape(server.name)} ({html.escape(protocol)})\n"
         f"Срок действия: {days} дн.\n\n"
         f"<pre>{html.escape(config_text)}</pre>"
     )
@@ -211,9 +274,9 @@ async def _deliver_key(
 
     # Provide importable files for protocols that use them.
     filename = None
-    if cred.protocol.lower() == "wireguard":
+    if protocol.lower() == "wireguard":
         filename = f"wg-{key_id}.conf"
-    elif cred.protocol.lower() == "openvpn":
+    elif protocol.lower() == "openvpn":
         filename = f"client-{key_id}.ovpn"
     if filename:
         await bot.send_document(
@@ -554,6 +617,126 @@ async def st_server_maxconn(message: Message, db: Database, state: FSMContext) -
     await state.clear()
     await message.answer(
         f"✅ Сервер добавлен (ID {server_id}).",
+        reply_markup=kb.admin_menu(),
+    )
+
+
+# ---- 3X-UI panel management
+@router.callback_query(F.data == "adm_addpanel")
+async def cb_adm_addpanel(call: CallbackQuery, config: Config, state: FSMContext) -> None:
+    if not _admin_only(config, call.from_user.id):
+        await call.answer("⛔", show_alert=True)
+        return
+    await state.set_state(AddPanel.name)
+    await _safe_edit(
+        call,
+        "Добавление 3X-UI панели.\n\nШаг 1/7. Введите название (для админки):",
+        kb.cancel_kb(),
+    )
+    await call.answer()
+
+
+@router.message(AddPanel.name)
+async def st_panel_name(message: Message, state: FSMContext) -> None:
+    await state.update_data(name=message.text.strip())
+    await state.set_state(AddPanel.panel_url)
+    await message.answer(
+        "Шаг 2/7. Введите URL панели вместе с портом и путём, например:\n"
+        "<code>http://1.2.3.4:54321</code> или <code>https://panel.site/secret</code>"
+    )
+
+
+@router.message(AddPanel.panel_url)
+async def st_panel_url(message: Message, state: FSMContext) -> None:
+    url = message.text.strip().rstrip("/")
+    if not url.startswith("http://") and not url.startswith("https://"):
+        await message.answer("URL должен начинаться с http:// или https://. Повторите:")
+        return
+    await state.update_data(panel_url=url)
+    await state.set_state(AddPanel.username)
+    await message.answer("Шаг 3/7. Введите логин админа панели:")
+
+
+@router.message(AddPanel.username)
+async def st_panel_user(message: Message, state: FSMContext) -> None:
+    await state.update_data(panel_user=message.text.strip())
+    await state.set_state(AddPanel.password)
+    await message.answer("Шаг 4/7. Введите пароль админа панели:")
+
+
+@router.message(AddPanel.password)
+async def st_panel_pass(message: Message, state: FSMContext) -> None:
+    await state.update_data(panel_pass=message.text)
+    await state.set_state(AddPanel.inbound_id)
+    await message.answer(
+        "Шаг 5/7. Введите ID inbound, в который добавлять клиентов (число "
+        "из списка inbounds в панели):"
+    )
+
+
+@router.message(AddPanel.inbound_id)
+async def st_panel_inbound(message: Message, state: FSMContext) -> None:
+    if not message.text or not message.text.strip().isdigit():
+        await message.answer("Введите числовой ID inbound.")
+        return
+    await state.update_data(inbound_id=int(message.text.strip()))
+    await state.set_state(AddPanel.public_host)
+    await message.answer(
+        "Шаг 6/7. Введите адрес (IP или домен), который увидят клиенты в ссылке, "
+        "или «-», чтобы взять хост из URL панели:"
+    )
+
+
+@router.message(AddPanel.public_host)
+async def st_panel_host(message: Message, state: FSMContext) -> None:
+    text = message.text.strip()
+    public_host = "" if text in ("-", "—", "") else text
+    await state.update_data(public_host=public_host)
+    await state.set_state(AddPanel.max_connections)
+    await message.answer("Шаг 7/7. Введите максимальное число подключений (число):")
+
+
+@router.message(AddPanel.max_connections)
+async def st_panel_maxconn(message: Message, db: Database, config: Config, state: FSMContext) -> None:
+    if not message.text or not message.text.strip().isdigit():
+        await message.answer("Введите положительное число.")
+        return
+    data = await state.get_data()
+    public_host = data.get("public_host") or urlsplit(data["panel_url"]).hostname or ""
+    server_id = await db.add_server(
+        name=data["name"],
+        host=public_host,
+        port=0,
+        protocol="3x-ui",
+        public_key=None,
+        max_connections=int(message.text.strip()),
+        panel_url=data["panel_url"],
+        panel_user=data["panel_user"],
+        panel_pass=data["panel_pass"],
+        inbound_id=data["inbound_id"],
+    )
+    await state.clear()
+
+    # Validate credentials/inbound by issuing a quick test login + inbound fetch.
+    server = await db.get_server(server_id)
+    note = ""
+    if server is not None:
+        panel = XUIPanel(
+            base_url=server.panel_url or "",
+            username=server.panel_user or "",
+            password=server.panel_pass or "",
+            inbound_id=server.inbound_id or 0,
+            public_host=server.host or "",
+            verify_ssl=config.xui_verify_ssl,
+        )
+        try:
+            await XUIProvisioner(panel).check()
+            note = "\n🔌 Подключение к панели успешно."
+        except XUIError as exc:
+            note = f"\n⚠️ Не удалось подключиться к панели: {html.escape(str(exc))}"
+
+    await message.answer(
+        f"✅ Панель 3X-UI добавлена (ID {server_id}).{note}",
         reply_markup=kb.admin_menu(),
     )
 
