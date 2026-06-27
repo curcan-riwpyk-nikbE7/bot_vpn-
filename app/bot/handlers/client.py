@@ -119,18 +119,20 @@ async def cmd_start(message: Message, state: FSMContext, bot: Bot) -> None:
         logo_file_id = await _get_setting(session, "logo_file_id", "")
         trial_enabled = await _get_setting(session, "trial_enabled", "true")
         can_trial = trial_enabled == "true" and await _can_use_trial(session, user)
+        channel_url = await _get_setting(session, "channel_url", "")
 
     text = greeting or f"🔥 <b>{html.escape(service_name)}</b>\n\nДобро пожаловать! Выберите действие:"
+    kb = client_kb.main_menu_with_channel(has_trial=can_trial, channel_url=channel_url)
 
     if logo_file_id:
         await bot.send_photo(
             message.chat.id,
             photo=logo_file_id,
             caption=text,
-            reply_markup=client_kb.main_menu(has_trial=can_trial),
+            reply_markup=kb,
         )
     else:
-        await message.answer(text, reply_markup=client_kb.main_menu(has_trial=can_trial))
+        await message.answer(text, reply_markup=kb)
 
 
 @router.callback_query(F.data == "back_main")
@@ -138,8 +140,10 @@ async def cb_back_main(call: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     async with async_session() as session:
         service_name = await _get_setting(session, "service_name", settings.service_name)
+        channel_url = await _get_setting(session, "channel_url", "")
     text = f"🔥 <b>{html.escape(service_name)}</b>\n\nВыберите действие:"
-    await _safe_edit_or_send(call, text, reply_markup=client_kb.main_menu())
+    kb = client_kb.main_menu_with_channel(channel_url=channel_url)
+    await _safe_edit_or_send(call, text, reply_markup=kb)
     await call.answer()
 
 
@@ -552,8 +556,74 @@ async def cb_bonuses(call: CallbackQuery) -> None:
         user = user_res.scalar_one_or_none()
         bonus = user.bonus_days if user else 0
 
-    text = f"⭐ <b>Бонусы</b>\n\nНакоплено бонусных дней: {bonus}"
-    await _safe_edit_or_send(call, text, reply_markup=client_kb.back_main_kb())
+    text = (
+        f"⭐ <b>Бонусы</b>\n\n"
+        f"Накоплено бонусных дней: <b>{bonus}</b>\n\n"
+    )
+    if bonus > 0:
+        text += "Нажмите «Активировать» чтобы получить VPN-ключ бесплатно!"
+    else:
+        text += "Приглашайте друзей чтобы получить бонусные дни!"
+    await _safe_edit_or_send(call, text, reply_markup=client_kb.bonuses_kb(bonus))
+    await call.answer()
+
+
+@router.callback_query(F.data == "activate_bonus")
+async def cb_activate_bonus(call: CallbackQuery, bot: Bot) -> None:
+    """Activate bonus days — generate VPN key for free."""
+    async with async_session() as session:
+        user_res = await session.execute(
+            select(User).where(User.telegram_id == call.from_user.id)  # type: ignore[union-attr]
+        )
+        user = user_res.scalar_one_or_none()
+        if not user or user.bonus_days <= 0:
+            await call.answer("Нет доступных бонусных дней.", show_alert=True)
+            return
+
+        server = await select_best_server(session)
+        if not server:
+            await call.answer("Нет доступных серверов.", show_alert=True)
+            return
+
+        bonus_days = user.bonus_days
+
+        class BonusTariff:
+            id = None
+            name = "Бонус"
+            days = bonus_days
+            devices = 1
+
+        try:
+            sub = await generate_vpn_key(session, user, BonusTariff(), server)  # type: ignore[arg-type]
+            sub.tariff_id = None
+            user.bonus_days = 0  # Reset bonus after activation
+            await session.commit()
+        except Exception as exc:
+            logger.error("Bonus VPN generation failed: %s", exc)
+            await call.answer("Ошибка создания ключа.", show_alert=True)
+            return
+
+    text = (
+        f"🎁 <b>Бонус активирован!</b>\n\n"
+        f"Срок: {bonus_days} дней\n"
+        f"Устройств: 1\n\n"
+        f"Ваш ключ:\n<code>{html.escape(sub.vless_link)}</code>"
+    )
+    try:
+        await call.message.delete()  # type: ignore[union-attr]
+    except Exception:
+        pass
+    await bot.send_message(
+        call.from_user.id,  # type: ignore[union-attr]
+        text,
+        reply_markup=client_kb.back_main_kb(),
+    )
+    qr_buf = generate_qr(sub.vless_link)
+    await bot.send_photo(
+        call.from_user.id,  # type: ignore[union-attr]
+        BufferedInputFile(qr_buf.read(), filename="vpn_qr.png"),
+        caption="📱 QR-код для подключения",
+    )
     await call.answer()
 
 

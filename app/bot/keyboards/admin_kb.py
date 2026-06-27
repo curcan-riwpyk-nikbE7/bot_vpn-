@@ -91,6 +91,7 @@ def customize_menu() -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="📝 Приветствие", callback_data="cust_greeting"))
     kb.row(InlineKeyboardButton(text="🖼 Логотип", callback_data="cust_logo"))
     kb.row(InlineKeyboardButton(text="🆘 Контакт поддержки", callback_data="cust_support"))
+    kb.row(InlineKeyboardButton(text="📢 Ссылка на канал", callback_data="cust_channel"))
     kb.row(InlineKeyboardButton(text="💳 Оплата (способ)", callback_data="cust_payment"))
     kb.row(InlineKeyboardButton(text="📱 Номер для СБП", callback_data="cust_phone"))
     kb.row(InlineKeyboardButton(text="🎁 Пробный период", callback_data="cust_trial"))

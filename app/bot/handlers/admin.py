@@ -509,11 +509,13 @@ async def cb_customize(call: CallbackQuery) -> None:
         support = await _get_setting(session, "support_username", "@support")
         pay_method = await _get_setting(session, "payment_method", "both")
         has_logo = await _get_setting(session, "logo_file_id", "")
+        channel = await _get_setting(session, "channel_url", "")
 
     text = (
         f"🎨 <b>Кастомизация бота</b>\n\n"
         f"Название: <b>{html.escape(name)}</b>\n"
         f"Поддержка: {html.escape(support)}\n"
+        f"Канал: {html.escape(channel) if channel else '❌ не указан'}\n"
         f"Оплата: {pay_method}\n"
         f"Логотип: {'✅ загружен' if has_logo else '❌ нет'}"
     )
@@ -608,6 +610,27 @@ async def st_cust_support(message: Message, state: FSMContext) -> None:
         await _set_setting(session, "support_username", text)
     await message.answer(
         f"✅ Контакт поддержки: {html.escape(text)}", reply_markup=admin_kb.admin_menu()
+    )
+
+
+@router.callback_query(F.data == "cust_channel")
+async def cb_cust_channel(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(Customize.channel_url)
+    await call.message.edit_text(  # type: ignore[union-attr]
+        "📢 Введите <b>ссылку на ваш канал</b> (например https://t.me/your_channel):",
+        reply_markup=admin_kb.cancel_kb(),
+    )
+    await call.answer()
+
+
+@router.message(Customize.channel_url)
+async def st_cust_channel(message: Message, state: FSMContext) -> None:
+    text = message.text.strip() if message.text else ""  # type: ignore[union-attr]
+    await state.clear()
+    async with async_session() as session:
+        await _set_setting(session, "channel_url", text)
+    await message.answer(
+        f"✅ Ссылка на канал: {html.escape(text)}", reply_markup=admin_kb.admin_menu()
     )
 
 

@@ -65,6 +65,31 @@ def sbp_transfer_kb(payment_id: int) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def bonuses_kb(bonus_days: int) -> InlineKeyboardMarkup:
+    """Bonuses menu with optional activation button."""
+    kb = InlineKeyboardBuilder()
+    if bonus_days > 0:
+        kb.row(InlineKeyboardButton(text=f"🎁 Активировать ({bonus_days} дн.)", callback_data="activate_bonus"))
+    kb.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="back_main"))
+    return kb.as_markup()
+
+
+def main_menu_with_channel(has_trial: bool = False, channel_url: str = "") -> InlineKeyboardMarkup:
+    """Main menu with optional channel button."""
+    kb = InlineKeyboardBuilder()
+    if has_trial:
+        kb.row(InlineKeyboardButton(text="🎁 Пробный период (бесплатно)", callback_data="trial"))
+    kb.row(InlineKeyboardButton(text="🌍 Купить VPN", callback_data="buy_vpn"))
+    kb.row(InlineKeyboardButton(text="🔑 Мой VPN", callback_data="my_vpn"))
+    kb.row(InlineKeyboardButton(text="💳 Продлить", callback_data="extend_vpn"))
+    kb.row(InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="referral"))
+    kb.row(InlineKeyboardButton(text="⭐ Бонусы", callback_data="bonuses"))
+    if channel_url:
+        kb.row(InlineKeyboardButton(text="📢 Наш канал", url=channel_url))
+    kb.row(InlineKeyboardButton(text="🆘 Поддержка", callback_data="support"))
+    return kb.as_markup()
+
+
 def back_main_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="back_main"))

@@ -45,3 +45,4 @@ class Customize(StatesGroup):
     support = State()
     phone = State()
     trial_days = State()
+    channel_url = State()
