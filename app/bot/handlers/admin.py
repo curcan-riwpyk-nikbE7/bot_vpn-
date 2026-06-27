@@ -729,21 +729,43 @@ async def cb_sbp_approve(call: CallbackQuery, bot: Bot) -> None:
             return
 
         from app.services.vpn_generator import generate_qr, generate_vpn_key, select_best_server
+        from app.services.vpn_generator import VPNGeneratorError
+
         server = await select_best_server(session)
         if not server:
             await call.answer("Нет доступных серверов!", show_alert=True)
             return
 
-        sub = await generate_vpn_key(session, user, tariff, server)
+        try:
+            sub = await generate_vpn_key(session, user, tariff, server)
+        except (VPNGeneratorError, Exception) as exc:
+            logger.error("VPN key generation failed for payment %s: %s", pmt_id, exc)
+            await call.answer(f"Ошибка создания ключа: {exc}", show_alert=True)
+            return
+
         await session.commit()
 
-        # Notify client
+        # Notify client with key + instructions
         from aiogram.types import BufferedInputFile
+
+        instructions = (
+            "📲 <b>Инструкция по подключению:</b>\n\n"
+            "1️⃣ Скачайте приложение:\n"
+            "• iPhone/iPad: <b>Streisand</b> или <b>V2Box</b> (App Store)\n"
+            "• Android: <b>V2rayNG</b> (Google Play)\n"
+            "• Windows: <b>Nekoray</b> или <b>Hiddify</b>\n"
+            "• macOS: <b>V2Box</b> или <b>Streisand</b>\n\n"
+            "2️⃣ Скопируйте ключ ниже и вставьте в приложение\n"
+            "   (или отсканируйте QR-код)\n\n"
+            "3️⃣ Подключитесь и пользуйтесь! 🚀"
+        )
         key_text = (
             f"✅ <b>VPN активирован!</b>\n\n"
             f"Тариф: {html.escape(tariff.name)} ({tariff.days} дн.)\n"
-            f"Устройств: {tariff.devices}\n\n"
-            f"Ваш ключ:\n<code>{html.escape(sub.vless_link)}</code>"
+            f"Устройств: {tariff.devices}\n"
+            f"Истекает: {sub.expire_date.strftime('%d.%m.%Y')}\n\n"
+            f"{instructions}\n\n"
+            f"🔑 <b>Ваш ключ:</b>\n<code>{html.escape(sub.vless_link)}</code>"
         )
         try:
             await bot.send_message(user.telegram_id, key_text)
@@ -751,10 +773,12 @@ async def cb_sbp_approve(call: CallbackQuery, bot: Bot) -> None:
             await bot.send_photo(
                 user.telegram_id,
                 BufferedInputFile(qr_buf.read(), filename="vpn_qr.png"),
-                caption="📱 QR-код для подключения",
+                caption="📱 QR-код — отсканируйте в приложении для подключения",
             )
         except Exception as exc:
             logger.error("Failed to send key to user %s: %s", user.telegram_id, exc)
+            await call.answer("Ключ создан, но не удалось отправить клиенту.", show_alert=True)
+            return
 
     await call.answer("✅ Оплата подтверждена, ключ выдан!", show_alert=True)
     await call.message.edit_text(  # type: ignore[union-attr]
