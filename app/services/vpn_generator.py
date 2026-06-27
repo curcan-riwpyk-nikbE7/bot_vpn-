@@ -44,7 +44,7 @@ async def generate_vpn_key(
     except XUIError as exc:
         raise VPNGeneratorError(f"Не удалось создать ключ: {exc}") from exc
 
-    expire = datetime.now(timezone.utc) + timedelta(days=tariff.days)
+    expire = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(days=tariff.days)
     sub = Subscription(
         user_id=user.id,
         server_id=server.id,
