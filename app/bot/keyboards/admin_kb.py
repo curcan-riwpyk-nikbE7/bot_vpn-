@@ -91,7 +91,9 @@ def customize_menu() -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="📝 Приветствие", callback_data="cust_greeting"))
     kb.row(InlineKeyboardButton(text="🖼 Логотип", callback_data="cust_logo"))
     kb.row(InlineKeyboardButton(text="🆘 Контакт поддержки", callback_data="cust_support"))
-    kb.row(InlineKeyboardButton(text="💳 Способ оплаты", callback_data="cust_payment"))
+    kb.row(InlineKeyboardButton(text="💳 Оплата (способ)", callback_data="cust_payment"))
+    kb.row(InlineKeyboardButton(text="📱 Номер для СБП", callback_data="cust_phone"))
+    kb.row(InlineKeyboardButton(text="🎁 Пробный период", callback_data="cust_trial"))
     kb.row(InlineKeyboardButton(text="⬅️ Админ", callback_data="adm_back"))
     return kb.as_markup()
 
@@ -99,9 +101,28 @@ def customize_menu() -> InlineKeyboardMarkup:
 def payment_method_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="💳 ЮKassa (карта)", callback_data="paymethod_card"))
-    kb.row(InlineKeyboardButton(text="📱 СБП (QR-код)", callback_data="paymethod_sbp"))
+    kb.row(InlineKeyboardButton(text="📱 Перевод по номеру (СБП)", callback_data="paymethod_transfer"))
     kb.row(InlineKeyboardButton(text="💳 + 📱 Оба", callback_data="paymethod_both"))
     kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="adm_customize"))
+    return kb.as_markup()
+
+
+def trial_settings_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="✅ Включить", callback_data="trial_on"))
+    kb.row(InlineKeyboardButton(text="❌ Выключить", callback_data="trial_off"))
+    kb.row(InlineKeyboardButton(text="📅 Изменить дни", callback_data="trial_days"))
+    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="adm_customize"))
+    return kb.as_markup()
+
+
+def sbp_confirm_kb(payment_id: int) -> InlineKeyboardMarkup:
+    """Admin confirmation for SBP transfer."""
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"sbp_approve:{payment_id}"),
+        InlineKeyboardButton(text="❌ Отклонить", callback_data=f"sbp_reject:{payment_id}"),
+    )
     return kb.as_markup()
 
 

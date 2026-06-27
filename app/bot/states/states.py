@@ -43,3 +43,5 @@ class Customize(StatesGroup):
     greeting = State()
     logo = State()
     support = State()
+    phone = State()
+    trial_days = State()

@@ -616,9 +616,164 @@ async def cb_paymethod(call: CallbackQuery) -> None:
     method = call.data.replace("paymethod_", "")  # type: ignore[union-attr]
     async with async_session() as session:
         await _set_setting(session, "payment_method", method)
-    labels = {"card": "💳 Карта", "sbp": "📱 СБП", "both": "💳 Карта + 📱 СБП"}
+    labels = {"card": "💳 Карта", "transfer": "📱 Перевод СБП", "both": "💳 + 📱 Оба"}
     await call.answer(f"✅ Способ оплаты: {labels.get(method, method)}", show_alert=True)
     await call.message.edit_text("🛠 <b>Админ-панель</b>", reply_markup=admin_kb.admin_menu())  # type: ignore[union-attr]
+
+
+# ---- Phone number for SBP
+@router.callback_query(F.data == "cust_phone")
+async def cb_cust_phone(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(Customize.phone)
+    await call.message.edit_text(  # type: ignore[union-attr]
+        "📱 Введите <b>номер телефона</b> для приёма переводов по СБП:\n"
+        "<i>(например: +79991234567)</i>\n\n"
+        "Можно также указать название банка.",
+        reply_markup=admin_kb.cancel_kb(),
+    )
+    await call.answer()
+
+
+@router.message(Customize.phone)
+async def st_cust_phone(message: Message, state: FSMContext) -> None:
+    text = message.text.strip() if message.text else ""  # type: ignore[union-attr]
+    await state.clear()
+    async with async_session() as session:
+        await _set_setting(session, "sbp_phone", text)
+    await message.answer(
+        f"✅ Номер для СБП: <b>{html.escape(text)}</b>", reply_markup=admin_kb.admin_menu()
+    )
+
+
+# ---- Trial period settings
+@router.callback_query(F.data == "cust_trial")
+async def cb_cust_trial(call: CallbackQuery) -> None:
+    async with async_session() as session:
+        enabled = await _get_setting(session, "trial_enabled", "true")
+        days = await _get_setting(session, "trial_days", "3")
+    status = "✅ Включён" if enabled == "true" else "❌ Выключен"
+    text = (
+        f"🎁 <b>Пробный период</b>\n\n"
+        f"Статус: {status}\n"
+        f"Длительность: {days} дней\n\n"
+        f"Каждый новый пользователь может получить бесплатный VPN один раз."
+    )
+    await call.message.edit_text(text, reply_markup=admin_kb.trial_settings_kb())  # type: ignore[union-attr]
+    await call.answer()
+
+
+@router.callback_query(F.data == "trial_on")
+async def cb_trial_on(call: CallbackQuery) -> None:
+    async with async_session() as session:
+        await _set_setting(session, "trial_enabled", "true")
+    await call.answer("✅ Пробный период включён!", show_alert=True)
+    await call.message.edit_text("🛠 <b>Админ-панель</b>", reply_markup=admin_kb.admin_menu())  # type: ignore[union-attr]
+
+
+@router.callback_query(F.data == "trial_off")
+async def cb_trial_off(call: CallbackQuery) -> None:
+    async with async_session() as session:
+        await _set_setting(session, "trial_enabled", "false")
+    await call.answer("❌ Пробный период выключен.", show_alert=True)
+    await call.message.edit_text("🛠 <b>Админ-панель</b>", reply_markup=admin_kb.admin_menu())  # type: ignore[union-attr]
+
+
+@router.callback_query(F.data == "trial_days")
+async def cb_trial_days(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(Customize.trial_days)
+    await call.message.edit_text(  # type: ignore[union-attr]
+        "📅 Введите <b>количество дней</b> пробного периода:",
+        reply_markup=admin_kb.cancel_kb(),
+    )
+    await call.answer()
+
+
+@router.message(Customize.trial_days)
+async def st_trial_days(message: Message, state: FSMContext) -> None:
+    text = message.text.strip() if message.text else ""  # type: ignore[union-attr]
+    if not text.isdigit() or int(text) < 1:
+        await message.answer("Введите число дней (минимум 1).")
+        return
+    await state.clear()
+    async with async_session() as session:
+        await _set_setting(session, "trial_days", text)
+    await message.answer(
+        f"✅ Пробный период: <b>{text} дней</b>", reply_markup=admin_kb.admin_menu()
+    )
+
+
+# ---- Admin SBP payment confirmations
+@router.callback_query(F.data.startswith("sbp_approve:"))
+async def cb_sbp_approve(call: CallbackQuery, bot: Bot) -> None:
+    pmt_id = int(call.data.split(":")[1])  # type: ignore[union-attr]
+    async with async_session() as session:
+        pmt = await session.get(Payment, pmt_id)
+        if not pmt or pmt.status == "paid":
+            await call.answer("Уже обработан.", show_alert=True)
+            return
+        pmt.status = "paid"
+
+        user = await session.get(User, pmt.user_id)
+        tariff = await session.get(Tariff, pmt.tariff_id) if pmt.tariff_id else None
+        if not user or not tariff:
+            await call.answer("Данные не найдены.", show_alert=True)
+            return
+
+        from app.services.vpn_generator import generate_qr, generate_vpn_key, select_best_server
+        server = await select_best_server(session)
+        if not server:
+            await call.answer("Нет доступных серверов!", show_alert=True)
+            return
+
+        sub = await generate_vpn_key(session, user, tariff, server)
+        await session.commit()
+
+        # Notify client
+        from aiogram.types import BufferedInputFile
+        key_text = (
+            f"✅ <b>VPN активирован!</b>\n\n"
+            f"Тариф: {html.escape(tariff.name)} ({tariff.days} дн.)\n"
+            f"Устройств: {tariff.devices}\n\n"
+            f"Ваш ключ:\n<code>{html.escape(sub.vless_link)}</code>"
+        )
+        try:
+            await bot.send_message(user.telegram_id, key_text)
+            qr_buf = generate_qr(sub.vless_link)
+            await bot.send_photo(
+                user.telegram_id,
+                BufferedInputFile(qr_buf.read(), filename="vpn_qr.png"),
+                caption="📱 QR-код для подключения",
+            )
+        except Exception as exc:
+            logger.error("Failed to send key to user %s: %s", user.telegram_id, exc)
+
+    await call.answer("✅ Оплата подтверждена, ключ выдан!", show_alert=True)
+    await call.message.edit_text(  # type: ignore[union-attr]
+        f"✅ Оплата #{pmt_id} подтверждена.\nКлюч выдан пользователю.",
+    )
+
+
+@router.callback_query(F.data.startswith("sbp_reject:"))
+async def cb_sbp_reject(call: CallbackQuery, bot: Bot) -> None:
+    pmt_id = int(call.data.split(":")[1])  # type: ignore[union-attr]
+    async with async_session() as session:
+        pmt = await session.get(Payment, pmt_id)
+        if not pmt:
+            await call.answer("Не найден.", show_alert=True)
+            return
+        pmt.status = "canceled"
+        user = await session.get(User, pmt.user_id)
+        await session.commit()
+        if user:
+            try:
+                await bot.send_message(
+                    user.telegram_id,
+                    "❌ Ваша оплата не подтверждена. Обратитесь в поддержку.",
+                )
+            except Exception:
+                pass
+    await call.answer("❌ Оплата отклонена.", show_alert=True)
+    await call.message.edit_text(f"❌ Оплата #{pmt_id} отклонена.")  # type: ignore[union-attr]
 
 
 # ================================================================= SETTINGS
