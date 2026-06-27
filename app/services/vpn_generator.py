@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import time
 from datetime import datetime, timedelta, timezone
 
 import qrcode
@@ -24,7 +25,9 @@ async def generate_vpn_key(
     server: Server,
 ) -> Subscription:
     """Create VPN key on selected server and persist subscription."""
-    email = f"tg{user.telegram_id}-{tariff.id}"
+    # Unique email per purchase (timestamp suffix prevents "already in use" errors)
+    ts = int(time.time()) % 100000
+    email = f"tg{user.telegram_id}-{tariff.id}-{ts}"
 
     xui = XUIService(
         base_url=server.url,
