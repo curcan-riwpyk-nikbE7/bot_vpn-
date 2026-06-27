@@ -47,17 +47,43 @@ async def _get_setting(session: AsyncSession, key: str, default: str = "") -> st
 
 
 async def _safe_edit_or_send(call: CallbackQuery, text: str, reply_markup=None) -> None:
-    """Edit message text or delete+send if it's a photo message."""
-    try:
-        await call.message.edit_text(text, reply_markup=reply_markup)  # type: ignore[union-attr]
-    except Exception:
+    """Edit message or resend with logo. Logo always accompanies messages."""
+    async with async_session() as session:
+        logo_file_id = await _get_setting(session, "logo_file_id", "")
+
+    msg = call.message  # type: ignore[union-attr]
+
+    if logo_file_id:
+        # Always show logo: try editing caption, else delete+send photo
+        if msg.photo:
+            try:
+                await msg.edit_caption(caption=text, reply_markup=reply_markup)
+                return
+            except Exception:
+                pass
+        # Delete old message and send new photo
         try:
-            await call.message.delete()  # type: ignore[union-attr]
+            await msg.delete()
         except Exception:
             pass
-        await call.bot.send_message(  # type: ignore[union-attr]
-            call.from_user.id, text, reply_markup=reply_markup  # type: ignore[union-attr]
+        await call.bot.send_photo(  # type: ignore[union-attr]
+            call.from_user.id,  # type: ignore[union-attr]
+            photo=logo_file_id,
+            caption=text,
+            reply_markup=reply_markup,
         )
+    else:
+        # No logo — plain text
+        try:
+            await msg.edit_text(text, reply_markup=reply_markup)
+        except Exception:
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+            await call.bot.send_message(  # type: ignore[union-attr]
+                call.from_user.id, text, reply_markup=reply_markup  # type: ignore[union-attr]
+            )
 
 
 async def _can_use_trial(session: AsyncSession, user: User) -> bool:
