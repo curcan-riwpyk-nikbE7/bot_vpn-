@@ -740,7 +740,8 @@ async def cb_sbp_approve(call: CallbackQuery, bot: Bot) -> None:
             sub = await generate_vpn_key(session, user, tariff, server)
         except (VPNGeneratorError, Exception) as exc:
             logger.error("VPN key generation failed for payment %s: %s", pmt_id, exc)
-            await call.answer(f"Ошибка создания ключа: {exc}", show_alert=True)
+            err_text = f"Ошибка: {exc}"[:180]
+            await call.answer(err_text, show_alert=True)
             return
 
         await session.commit()
