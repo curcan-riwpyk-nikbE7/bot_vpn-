@@ -240,15 +240,20 @@ async def st_srv_password(message: Message, state: FSMContext) -> None:
         inbound_id = inbound_info.get("id", 1)
     except XUIError as exc:
         err = str(exc)
-        hints = []
-        if "403" in err or "login failed" in err.lower():
-            hints.append("• Проверьте логин и пароль")
-            hints.append("• Если панель имеет секретный путь, добавьте его в URL")
-            hints.append("  Пример: https://ip:port/secretpath")
-        elif "timeout" in err.lower() or "connect" in err.lower():
-            hints.append("• Проверьте что панель доступна по указанному адресу")
-            hints.append("• Проверьте порт")
-        hint_text = "\n".join(hints) if hints else "Проверьте URL, логин и пароль."
+        hints = [
+            "Бот пробовал подключиться по http и https.",
+            "",
+            "Возможные причины:",
+            "• Неправильный логин или пароль",
+            "• Секретный путь (URI Path) указан неверно",
+            "• Панель недоступна извне (файрвол)",
+            "",
+            "Что попробовать:",
+            "• Скопируйте URL прямо из адресной строки браузера",
+            "  (всё до /panel/, например: https://ip:port/path)",
+            "• Убедитесь что логин/пароль верные (те же что в браузере)",
+        ]
+        hint_text = "\n".join(hints)
         await message.answer(
             f"❌ <b>Не удалось подключиться</b>\n\n"
             f"Ошибка: <code>{html.escape(err)}</code>\n\n"

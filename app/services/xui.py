@@ -53,25 +53,103 @@ class XUIService:
     def _url(self, path: str) -> str:
         return f"{self.base_url}/{path.lstrip('/')}"
 
-    async def _login(self, session: aiohttp.ClientSession) -> None:
-        # Try standard login endpoint
+    def _alt_base_urls(self) -> list[str]:
+        """Generate alternative base URLs to try (http/https swap, with/without path)."""
+        urls = [self.base_url]
+        # Also try protocol swap
+        if self.base_url.startswith("https://"):
+            urls.append(self.base_url.replace("https://", "http://", 1))
+        elif self.base_url.startswith("http://"):
+            urls.append(self.base_url.replace("http://", "https://", 1))
+        # Also try root URL (without secret path) in case API is at root
+        parts = urlsplit(self.base_url)
+        if parts.path and parts.path != "/":
+            root = f"{parts.scheme}://{parts.netloc}"
+            if root not in urls:
+                urls.append(root)
+            alt_scheme = "http" if parts.scheme == "https" else "https"
+            alt_root = f"{alt_scheme}://{parts.netloc}"
+            if alt_root not in urls:
+                urls.append(alt_root)
+        return urls
+
+    async def _try_login(
+        self, session: aiohttp.ClientSession, base: str
+    ) -> str | None:
+        """Try to login with given base URL. Returns None on success, error string on failure."""
         login_paths = ["login", "panel/login"]
-        last_error = ""
         for path in login_paths:
+            url = f"{base}/{path.lstrip('/')}"
+            # Try form-data
             try:
                 async with session.post(
-                    self._url(path),
+                    url,
                     data={"username": self.username, "password": self.password},
                 ) as resp:
                     if resp.status == 200:
                         body = await resp.json(content_type=None)
                         if body.get("success"):
-                            return
-                        last_error = body.get("msg", "unknown")
-                    else:
-                        last_error = f"HTTP {resp.status}"
-            except aiohttp.ClientError as exc:
-                last_error = str(exc)
+                            self.base_url = base
+                            return None
+                    elif resp.status != 404:
+                        return f"HTTP {resp.status} at {url}"
+            except aiohttp.ClientError:
+                pass
+            # Try JSON body (some 3X-UI versions)
+            try:
+                async with session.post(
+                    url,
+                    json={"username": self.username, "password": self.password},
+                ) as resp:
+                    if resp.status == 200:
+                        body = await resp.json(content_type=None)
+                        if body.get("success"):
+                            self.base_url = base
+                            return None
+            except aiohttp.ClientError:
+                pass
+        return None  # all 404 — not this base
+
+    async def _login(self, session: aiohttp.ClientSession) -> None:
+        """Try login across http/https and multiple paths."""
+        alt_urls = self._alt_base_urls()
+        last_error = ""
+        for base in alt_urls:
+            login_paths = ["login", "panel/login"]
+            for path in login_paths:
+                url = f"{base}/{path.lstrip('/')}"
+                # Form data (standard)
+                try:
+                    async with session.post(
+                        url,
+                        data={"username": self.username, "password": self.password},
+                    ) as resp:
+                        if resp.status == 200:
+                            body = await resp.json(content_type=None)
+                            if body.get("success"):
+                                self.base_url = base
+                                return
+                            last_error = f"{body.get('msg', 'wrong credentials')}"
+                        elif resp.status == 404:
+                            last_error = f"HTTP 404 at {url}"
+                        else:
+                            last_error = f"HTTP {resp.status}"
+                except aiohttp.ClientError as exc:
+                    last_error = f"{exc.__class__.__name__}: {exc}"
+                    continue
+                # JSON body (newer 3X-UI builds)
+                try:
+                    async with session.post(
+                        url,
+                        json={"username": self.username, "password": self.password},
+                    ) as resp:
+                        if resp.status == 200:
+                            body = await resp.json(content_type=None)
+                            if body.get("success"):
+                                self.base_url = base
+                                return
+                except aiohttp.ClientError:
+                    pass
         raise XUIError(f"login failed: {last_error}")
 
     async def _api(
