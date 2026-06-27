@@ -46,6 +46,21 @@ async def _get_setting(session: AsyncSession, key: str, default: str = "") -> st
     return row.value if row else default
 
 
+async def _safe_edit_or_send(call: CallbackQuery, text: str, reply_markup=None) -> None:
+    """Edit message text or delete+send if it's a photo message."""
+    try:
+        await call.message.edit_text(text, reply_markup=reply_markup)  # type: ignore[union-attr]
+    except Exception:
+        # Photo messages can't be edited to text — delete and send new
+        try:
+            await call.message.delete()  # type: ignore[union-attr]
+        except Exception:
+            pass
+        await call.bot.send_message(  # type: ignore[union-attr]
+            call.from_user.id, text, reply_markup=reply_markup  # type: ignore[union-attr]
+        )
+
+
 # ----------------------------------------------------------------- /start
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext, bot: Bot) -> None:
@@ -86,7 +101,7 @@ async def cb_back_main(call: CallbackQuery, state: FSMContext) -> None:
     async with async_session() as session:
         service_name = await _get_setting(session, "service_name", settings.service_name)
     text = f"🔥 <b>{html.escape(service_name)}</b>\n\nВыберите действие:"
-    await call.message.edit_text(text, reply_markup=client_kb.main_menu())  # type: ignore[union-attr]
+    await _safe_edit_or_send(call, text, reply_markup=client_kb.main_menu())
     await call.answer()
 
 
@@ -102,8 +117,8 @@ async def cb_buy_vpn(call: CallbackQuery) -> None:
     if not tariffs:
         await call.answer("Тарифы ещё не настроены.", show_alert=True)
         return
-    await call.message.edit_text(  # type: ignore[union-attr]
-        "🌍 <b>Выберите тариф:</b>", reply_markup=client_kb.tariffs_menu(tariffs)
+    await _safe_edit_or_send(
+        call, "🌍 <b>Выберите тариф:</b>", reply_markup=client_kb.tariffs_menu(tariffs)
     )
     await call.answer()
 
@@ -121,7 +136,6 @@ async def cb_select_tariff(call: CallbackQuery) -> None:
         pay_method = await _get_setting(session, "payment_method", "both")
 
         try:
-            # Determine confirmation type based on admin setting
             confirmation_type = "redirect"
             if pay_method == "sbp":
                 confirmation_type = "qr"
@@ -154,8 +168,11 @@ async def cb_select_tariff(call: CallbackQuery) -> None:
             if confirmation_type == "qr" and result.get("qr_data"):
                 # SBP QR code payment
                 qr_buf = pay_svc.generate_payment_qr(result["qr_data"])
-                await call.message.delete()  # type: ignore[union-attr]
-                await call.bot.send_photo(
+                try:
+                    await call.message.delete()  # type: ignore[union-attr]
+                except Exception:
+                    pass
+                await call.bot.send_photo(  # type: ignore[union-attr]
                     call.from_user.id,  # type: ignore[union-attr]
                     BufferedInputFile(qr_buf.read(), filename="payment_qr.png"),
                     caption=(
@@ -169,7 +186,8 @@ async def cb_select_tariff(call: CallbackQuery) -> None:
                 )
             else:
                 # Regular card payment with redirect
-                await call.message.edit_text(  # type: ignore[union-attr]
+                await _safe_edit_or_send(
+                    call,
                     f"💳 <b>Оплата</b>\n\n"
                     f"Тариф: {html.escape(tariff.name)}\n"
                     f"Сумма: {int(tariff.price)}₽\n\n"
@@ -275,7 +293,7 @@ async def cb_my_vpn(call: CallbackQuery) -> None:
             )
         text = "\n".join(lines)
 
-    await call.message.edit_text(text, reply_markup=client_kb.back_main_kb())  # type: ignore[union-attr]
+    await _safe_edit_or_send(call, text, reply_markup=client_kb.back_main_kb())
     await call.answer()
 
 
@@ -291,7 +309,8 @@ async def cb_extend_vpn(call: CallbackQuery) -> None:
     if not tariffs:
         await call.answer("Тарифы не настроены.", show_alert=True)
         return
-    await call.message.edit_text(  # type: ignore[union-attr]
+    await _safe_edit_or_send(
+        call,
         "💳 <b>Продление VPN — выберите тариф:</b>",
         reply_markup=client_kb.tariffs_menu(tariffs),
     )
@@ -318,7 +337,7 @@ async def cb_referral(call: CallbackQuery, bot: Bot) -> None:
         f"🎯 3 друга = 7 дней VPN бесплатно\n"
         f"🎯 10 друзей = 30 дней VPN бесплатно"
     )
-    await call.message.edit_text(text, reply_markup=client_kb.back_main_kb())  # type: ignore[union-attr]
+    await _safe_edit_or_send(call, text, reply_markup=client_kb.back_main_kb())
     await call.answer()
 
 
@@ -333,7 +352,7 @@ async def cb_bonuses(call: CallbackQuery) -> None:
         bonus = user.bonus_days if user else 0
 
     text = f"⭐ <b>Бонусы</b>\n\nНакоплено бонусных дней: {bonus}"
-    await call.message.edit_text(text, reply_markup=client_kb.back_main_kb())  # type: ignore[union-attr]
+    await _safe_edit_or_send(call, text, reply_markup=client_kb.back_main_kb())
     await call.answer()
 
 
@@ -343,5 +362,5 @@ async def cb_support(call: CallbackQuery) -> None:
     async with async_session() as session:
         support = await _get_setting(session, "support_username", settings.support_username)
     text = f"🆘 <b>Поддержка</b>\n\nНапишите: {html.escape(support)}"
-    await call.message.edit_text(text, reply_markup=client_kb.back_main_kb())  # type: ignore[union-attr]
+    await _safe_edit_or_send(call, text, reply_markup=client_kb.back_main_kb())
     await call.answer()

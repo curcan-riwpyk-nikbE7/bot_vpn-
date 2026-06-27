@@ -54,15 +54,25 @@ class XUIService:
         return f"{self.base_url}/{path.lstrip('/')}"
 
     async def _login(self, session: aiohttp.ClientSession) -> None:
-        async with session.post(
-            self._url("login"),
-            data={"username": self.username, "password": self.password},
-        ) as resp:
-            if resp.status != 200:
-                raise XUIError(f"login HTTP {resp.status}")
-            body = await resp.json(content_type=None)
-        if not body.get("success"):
-            raise XUIError(f"login failed: {body.get('msg', 'unknown')}")
+        # Try standard login endpoint
+        login_paths = ["login", "panel/login"]
+        last_error = ""
+        for path in login_paths:
+            try:
+                async with session.post(
+                    self._url(path),
+                    data={"username": self.username, "password": self.password},
+                ) as resp:
+                    if resp.status == 200:
+                        body = await resp.json(content_type=None)
+                        if body.get("success"):
+                            return
+                        last_error = body.get("msg", "unknown")
+                    else:
+                        last_error = f"HTTP {resp.status}"
+            except aiohttp.ClientError as exc:
+                last_error = str(exc)
+        raise XUIError(f"login failed: {last_error}")
 
     async def _api(
         self,
@@ -88,15 +98,40 @@ class XUIService:
             raise XUIError(f"inbound {self.inbound_id} not found")
         return obj
 
+    async def _list_inbounds(self, session: aiohttp.ClientSession) -> list[dict]:
+        body = await self._api(session, "GET", "panel/api/inbounds/list")
+        obj = body.get("obj")
+        if not isinstance(obj, list):
+            return []
+        return obj
+
     # ---------------------------------------------------------------- public
     async def check(self) -> dict:
-        """Verify credentials and inbound existence."""
+        """Verify credentials and inbound existence. Returns first inbound info."""
         connector = aiohttp.TCPConnector(ssl=self.verify_ssl)
         async with aiohttp.ClientSession(
             timeout=self._timeout, connector=connector, cookie_jar=aiohttp.CookieJar(unsafe=True)
         ) as session:
             await self._login(session)
-            return await self._get_inbound(session)
+            # Try to get the specific inbound first
+            try:
+                return await self._get_inbound(session)
+            except XUIError:
+                pass
+            # Fall back to listing all inbounds
+            inbounds = await self._list_inbounds(session)
+            if inbounds:
+                return inbounds[0]
+            raise XUIError("No inbounds found on this panel")
+
+    async def list_inbounds(self) -> list[dict]:
+        """List all inbounds on the panel."""
+        connector = aiohttp.TCPConnector(ssl=self.verify_ssl)
+        async with aiohttp.ClientSession(
+            timeout=self._timeout, connector=connector, cookie_jar=aiohttp.CookieJar(unsafe=True)
+        ) as session:
+            await self._login(session)
+            return await self._list_inbounds(session)
 
     async def add_client(
         self, *, email: str, days: int, total_gb: int = 0, devices: int = 1
