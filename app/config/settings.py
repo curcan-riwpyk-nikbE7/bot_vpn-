@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -10,6 +11,17 @@ class Settings(BaseSettings):
     bot_token: str = ""
     admin_ids: list[int] = []
     webhook_url: str = ""
+
+    @field_validator("admin_ids", mode="before")
+    @classmethod
+    def parse_admin_ids(cls, v: object) -> list[int]:
+        if isinstance(v, list):
+            return [int(x) for x in v]
+        if isinstance(v, int):
+            return [v]
+        if isinstance(v, str):
+            return [int(x.strip()) for x in v.split(",") if x.strip()]
+        return []
 
     # Database
     database_url: str = "postgresql+asyncpg://vpn_bot:vpn_bot_secret@postgres:5432/vpn_shop"
