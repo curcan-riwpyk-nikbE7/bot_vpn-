@@ -143,7 +143,7 @@ async def cb_trial(call: CallbackQuery, bot: Bot) -> None:
 
         # Create a mock tariff-like object for VPN generation
         class TrialTariff:
-            id = 0
+            id = None  # None = no FK constraint (trial has no real tariff)
             name = "Пробный"
             days = trial_days
             devices = 1

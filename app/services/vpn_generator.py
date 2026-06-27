@@ -27,7 +27,8 @@ async def generate_vpn_key(
     """Create VPN key on selected server and persist subscription."""
     # Unique email per purchase (timestamp suffix prevents "already in use" errors)
     ts = int(time.time()) % 100000
-    email = f"tg{user.telegram_id}-{tariff.id}-{ts}"
+    tariff_id_val = tariff.id if tariff.id else None
+    email = f"tg{user.telegram_id}-{tariff.id or 'trial'}-{ts}"
 
     xui = XUIService(
         base_url=server.url,
@@ -48,7 +49,7 @@ async def generate_vpn_key(
     sub = Subscription(
         user_id=user.id,
         server_id=server.id,
-        tariff_id=tariff.id,
+        tariff_id=tariff_id_val,
         client_uuid=result.client_uuid,
         client_email=result.email,
         vless_link=result.access_link,
