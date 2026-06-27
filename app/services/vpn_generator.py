@@ -69,7 +69,7 @@ async def revoke_vpn_key(session: AsyncSession, sub: Subscription, server: Serve
         domain=server.domain,
     )
     try:
-        await xui.remove_client(sub.client_uuid)
+        await xui.remove_client(sub.client_email)
     except XUIError:
         pass  # best-effort cleanup
 

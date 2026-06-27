@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import time
-import uuid as uuid_lib
 from dataclasses import dataclass
 from urllib.parse import quote, urlencode, urlsplit
 
@@ -217,43 +216,44 @@ class XUIService:
             if security != "reality":
                 flow = ""
 
-            client_uuid = str(uuid_lib.uuid4())
-            sub_id = uuid_lib.uuid4().hex[:16]
-            client_settings = {
-                "clients": [
-                    {
-                        "id": client_uuid,
-                        "email": email,
-                        "flow": flow,
-                        "limitIp": devices,
-                        "totalGB": max(0, total_gb) * 1024**3,
-                        "expiryTime": _expiry_ms(days),
-                        "enable": True,
-                        "tgId": "",
-                        "subId": sub_id,
-                        "reset": 0,
-                    }
-                ]
+            # 3X-UI v3.x API: POST /panel/api/clients/add
+            client_body: dict = {
+                "email": email,
+                "totalGB": max(0, total_gb) * 1024**3,
+                "expiryTime": _expiry_ms(days),
+                "limitIp": devices,
+                "enable": True,
+                "flow": flow,
             }
             await self._api(
                 session,
                 "POST",
-                "panel/api/inbounds/addClient",
-                json_body={"id": self.inbound_id, "settings": json.dumps(client_settings)},
+                "panel/api/clients/add",
+                json_body={"client": client_body, "inboundIds": [self.inbound_id]},
             )
+
+            # Fetch the created client to get server-generated UUID
+            client_data = await self._api(
+                session, "GET", f"panel/api/clients/get/{email}"
+            )
+            obj = client_data.get("obj", {})
+            client_info = obj.get("client", {}) if isinstance(obj, dict) else {}
+            client_uuid = client_info.get("uuid", "")
+            if not client_uuid:
+                raise XUIError("Клиент создан, но не удалось получить UUID")
 
             link = self._build_vless_link(inbound, client_uuid, email, flow)
             return XUIClientResult(access_link=link, client_uuid=client_uuid, email=email)
 
-    async def remove_client(self, client_uuid: str) -> None:
-        """Delete a client from the inbound."""
+    async def remove_client(self, client_email: str) -> None:
+        """Delete a client by email (3X-UI v3.x API)."""
         connector = aiohttp.TCPConnector(ssl=self.verify_ssl)
         async with aiohttp.ClientSession(
             timeout=self._timeout, connector=connector, cookie_jar=aiohttp.CookieJar(unsafe=True)
         ) as session:
             await self._login(session)
             await self._api(
-                session, "POST", f"panel/api/inbounds/{self.inbound_id}/delClient/{client_uuid}"
+                session, "POST", f"panel/api/clients/del/{client_email}"
             )
 
     async def get_client_count(self) -> int:
