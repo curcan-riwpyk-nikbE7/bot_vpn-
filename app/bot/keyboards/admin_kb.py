@@ -15,6 +15,7 @@ def admin_menu() -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="👥 Клиенты", callback_data="adm_clients"))
     kb.row(InlineKeyboardButton(text="📊 Статистика", callback_data="adm_stats"))
     kb.row(InlineKeyboardButton(text="📢 Рассылка", callback_data="adm_mailing"))
+    kb.row(InlineKeyboardButton(text="🎨 Кастомизация", callback_data="adm_customize"))
     kb.row(InlineKeyboardButton(text="⚙️ Настройки", callback_data="adm_settings"))
     return kb.as_markup()
 
@@ -37,6 +38,17 @@ def server_actions(server_id: int) -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="🔴 Выключить", callback_data=f"adm_srv_off:{server_id}"))
     kb.row(InlineKeyboardButton(text="🗑 Удалить", callback_data=f"adm_srv_del:{server_id}"))
     kb.row(InlineKeyboardButton(text="⬅️ Серверы", callback_data="adm_servers"))
+    return kb.as_markup()
+
+
+def srv_step_kb(step: int) -> InlineKeyboardMarkup:
+    """Back + Cancel for server add steps."""
+    kb = InlineKeyboardBuilder()
+    buttons = []
+    if step > 1:
+        buttons.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"srv_back:{step}"))
+    buttons.append(InlineKeyboardButton(text="❌ Отмена", callback_data="cancel"))
+    kb.row(*buttons)
     return kb.as_markup()
 
 
@@ -70,6 +82,26 @@ def mailing_target() -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="🟢 Активные", callback_data="mail_active"))
     kb.row(InlineKeyboardButton(text="⏰ Заканчивается подписка", callback_data="mail_expiring"))
     kb.row(InlineKeyboardButton(text="⬅️ Админ", callback_data="adm_back"))
+    return kb.as_markup()
+
+
+def customize_menu() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="✏️ Название сервиса", callback_data="cust_name"))
+    kb.row(InlineKeyboardButton(text="📝 Приветствие", callback_data="cust_greeting"))
+    kb.row(InlineKeyboardButton(text="🖼 Логотип", callback_data="cust_logo"))
+    kb.row(InlineKeyboardButton(text="🆘 Контакт поддержки", callback_data="cust_support"))
+    kb.row(InlineKeyboardButton(text="💳 Способ оплаты", callback_data="cust_payment"))
+    kb.row(InlineKeyboardButton(text="⬅️ Админ", callback_data="adm_back"))
+    return kb.as_markup()
+
+
+def payment_method_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="💳 ЮKassa (карта)", callback_data="paymethod_card"))
+    kb.row(InlineKeyboardButton(text="📱 СБП (QR-код)", callback_data="paymethod_sbp"))
+    kb.row(InlineKeyboardButton(text="💳 + 📱 Оба", callback_data="paymethod_both"))
+    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="adm_customize"))
     return kb.as_markup()
 
 

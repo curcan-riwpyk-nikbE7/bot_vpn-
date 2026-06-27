@@ -8,9 +8,6 @@ class AddServer(StatesGroup):
     url = State()
     login = State()
     password = State()
-    inbound_id = State()
-    domain = State()
-    protocol = State()
 
 
 class AddTariff(StatesGroup):
@@ -39,3 +36,10 @@ class EditSetting(StatesGroup):
 
 class SearchClient(StatesGroup):
     query = State()
+
+
+class Customize(StatesGroup):
+    name = State()
+    greeting = State()
+    logo = State()
+    support = State()

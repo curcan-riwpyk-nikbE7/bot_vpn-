@@ -36,6 +36,14 @@ def payment_kb(payment_url: str, payment_id: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def check_payment_kb(payment_id: str) -> InlineKeyboardMarkup:
+    """Keyboard for SBP QR payment (no redirect URL, just check button)."""
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="✅ Проверить оплату", callback_data=f"check_pay:{payment_id}"))
+    kb.row(InlineKeyboardButton(text="⬅️ Отмена", callback_data="back_main"))
+    return kb.as_markup()
+
+
 def back_main_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="back_main"))

@@ -48,7 +48,7 @@ async def _get_setting(session: AsyncSession, key: str, default: str = "") -> st
 
 # ----------------------------------------------------------------- /start
 @router.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext) -> None:
+async def cmd_start(message: Message, state: FSMContext, bot: Bot) -> None:
     await state.clear()
     async with async_session() as session:
         user = await _get_or_create_user(session, message)
@@ -64,16 +64,28 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
                 pass
 
         greeting = await _get_setting(session, "greeting", "")
+        service_name = await _get_setting(session, "service_name", settings.service_name)
+        logo_file_id = await _get_setting(session, "logo_file_id", "")
 
-    service_name = settings.service_name
     text = greeting or f"🔥 <b>{html.escape(service_name)}</b>\n\nДобро пожаловать! Выберите действие:"
-    await message.answer(text, reply_markup=client_kb.main_menu())
+
+    if logo_file_id:
+        await bot.send_photo(
+            message.chat.id,
+            photo=logo_file_id,
+            caption=text,
+            reply_markup=client_kb.main_menu(),
+        )
+    else:
+        await message.answer(text, reply_markup=client_kb.main_menu())
 
 
 @router.callback_query(F.data == "back_main")
 async def cb_back_main(call: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    text = f"🔥 <b>{html.escape(settings.service_name)}</b>\n\nВыберите действие:"
+    async with async_session() as session:
+        service_name = await _get_setting(session, "service_name", settings.service_name)
+    text = f"🔥 <b>{html.escape(service_name)}</b>\n\nВыберите действие:"
     await call.message.edit_text(text, reply_markup=client_kb.main_menu())  # type: ignore[union-attr]
     await call.answer()
 
@@ -105,13 +117,21 @@ async def cb_select_tariff(call: CallbackQuery) -> None:
             await call.answer("Тариф не найден.", show_alert=True)
             return
 
-        # Create payment
+        # Get payment method preference
+        pay_method = await _get_setting(session, "payment_method", "both")
+
         try:
+            # Determine confirmation type based on admin setting
+            confirmation_type = "redirect"
+            if pay_method == "sbp":
+                confirmation_type = "qr"
+
             meta = {"user_id": str(call.from_user.id), "tariff_id": str(tariff.id)}  # type: ignore[union-attr]
             result = await pay_svc.create_payment(
                 amount=float(tariff.price),
                 description=f"VPN: {tariff.name} ({tariff.days} дн.)",
                 metadata=meta,
+                confirmation_type=confirmation_type,
             )
             # Save pending payment
             user_res = await session.execute(
@@ -130,13 +150,32 @@ async def cb_select_tariff(call: CallbackQuery) -> None:
                 session.add(pmt)
                 await session.commit()
 
-            await call.message.edit_text(  # type: ignore[union-attr]
-                f"💳 <b>Оплата</b>\n\n"
-                f"Тариф: {html.escape(tariff.name)}\n"
-                f"Сумма: {int(tariff.price)}₽\n\n"
-                f"Нажмите «Оплатить», затем «Проверить оплату».",
-                reply_markup=client_kb.payment_kb(result["confirmation_url"], result["id"]),
-            )
+            # Build response based on payment method
+            if confirmation_type == "qr" and result.get("qr_data"):
+                # SBP QR code payment
+                qr_buf = pay_svc.generate_payment_qr(result["qr_data"])
+                await call.message.delete()  # type: ignore[union-attr]
+                await call.bot.send_photo(
+                    call.from_user.id,  # type: ignore[union-attr]
+                    BufferedInputFile(qr_buf.read(), filename="payment_qr.png"),
+                    caption=(
+                        f"📱 <b>Оплата через СБП</b>\n\n"
+                        f"Тариф: {html.escape(tariff.name)}\n"
+                        f"Сумма: {int(tariff.price)}₽\n\n"
+                        f"Отсканируйте QR-код в приложении банка.\n"
+                        f"После оплаты нажмите «Проверить»."
+                    ),
+                    reply_markup=client_kb.check_payment_kb(result["id"]),
+                )
+            else:
+                # Regular card payment with redirect
+                await call.message.edit_text(  # type: ignore[union-attr]
+                    f"💳 <b>Оплата</b>\n\n"
+                    f"Тариф: {html.escape(tariff.name)}\n"
+                    f"Сумма: {int(tariff.price)}₽\n\n"
+                    f"Нажмите «Оплатить», затем «Проверить оплату».",
+                    reply_markup=client_kb.payment_kb(result.get("confirmation_url", ""), result["id"]),
+                )
         except Exception as exc:
             logger.error("Payment creation failed: %s", exc)
             await call.answer("Ошибка создания платежа. Попробуйте позже.", show_alert=True)
@@ -191,7 +230,11 @@ async def cb_check_payment(call: CallbackQuery, bot: Bot) -> None:
             f"Устройств: {tariff.devices}\n\n"
             f"Ваш ключ:\n<code>{html.escape(sub.vless_link)}</code>"
         )
-        await call.message.edit_text(text, reply_markup=client_kb.back_main_kb())  # type: ignore[union-attr]
+        await bot.send_message(
+            call.from_user.id,  # type: ignore[union-attr]
+            text,
+            reply_markup=client_kb.back_main_kb(),
+        )
 
         qr_buf = generate_qr(sub.vless_link)
         await bot.send_photo(
