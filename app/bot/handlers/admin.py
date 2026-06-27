@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import logging
+import re
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
@@ -195,6 +196,9 @@ async def st_srv_url(message: Message, state: FSMContext) -> None:
     url = message.text.strip()  # type: ignore[union-attr]
     if not url.startswith("http"):
         url = f"https://{url}"
+    # Strip /panel, /panel/, /panel/settings etc. — user often copies full browser URL
+    url = re.sub(r"/panel(/.*)?$", "", url)
+    url = url.rstrip("/")
     await state.update_data(url=url)
     await state.set_state(AddServer.login)
     data = await state.get_data()
