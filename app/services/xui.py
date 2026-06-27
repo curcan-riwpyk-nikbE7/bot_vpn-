@@ -53,104 +53,84 @@ class XUIService:
     def _url(self, path: str) -> str:
         return f"{self.base_url}/{path.lstrip('/')}"
 
-    def _alt_base_urls(self) -> list[str]:
-        """Generate alternative base URLs to try (http/https swap, with/without path)."""
-        urls = [self.base_url]
-        # Also try protocol swap
-        if self.base_url.startswith("https://"):
-            urls.append(self.base_url.replace("https://", "http://", 1))
-        elif self.base_url.startswith("http://"):
-            urls.append(self.base_url.replace("http://", "https://", 1))
-        # Also try root URL (without secret path) in case API is at root
-        parts = urlsplit(self.base_url)
-        if parts.path and parts.path != "/":
-            root = f"{parts.scheme}://{parts.netloc}"
-            if root not in urls:
-                urls.append(root)
-            alt_scheme = "http" if parts.scheme == "https" else "https"
-            alt_root = f"{alt_scheme}://{parts.netloc}"
-            if alt_root not in urls:
-                urls.append(alt_root)
-        return urls
-
-    async def _try_login(
-        self, session: aiohttp.ClientSession, base: str
-    ) -> str | None:
-        """Try to login with given base URL. Returns None on success, error string on failure."""
-        login_paths = ["login", "panel/login"]
-        for path in login_paths:
-            url = f"{base}/{path.lstrip('/')}"
-            # Try form-data
-            try:
-                async with session.post(
-                    url,
-                    data={"username": self.username, "password": self.password},
-                ) as resp:
-                    if resp.status == 200:
-                        body = await resp.json(content_type=None)
-                        if body.get("success"):
-                            self.base_url = base
-                            return None
-                    elif resp.status != 404:
-                        return f"HTTP {resp.status} at {url}"
-            except aiohttp.ClientError:
-                pass
-            # Try JSON body (some 3X-UI versions)
-            try:
-                async with session.post(
-                    url,
-                    json={"username": self.username, "password": self.password},
-                ) as resp:
-                    if resp.status == 200:
-                        body = await resp.json(content_type=None)
-                        if body.get("success"):
-                            self.base_url = base
-                            return None
-            except aiohttp.ClientError:
-                pass
-        return None  # all 404 — not this base
+    async def _get_csrf_token(self, session: aiohttp.ClientSession, base: str) -> str:
+        """Fetch CSRF token from 3X-UI panel (required for v2.4+/v3.x)."""
+        url = f"{base}/csrf-token"
+        try:
+            async with session.get(
+                url, headers={"X-Requested-With": "XMLHttpRequest"}
+            ) as resp:
+                if resp.status == 200:
+                    body = await resp.json(content_type=None)
+                    if body.get("success") and body.get("obj"):
+                        return str(body["obj"])
+        except (aiohttp.ClientError, Exception):
+            pass
+        return ""
 
     async def _login(self, session: aiohttp.ClientSession) -> None:
-        """Try login across http/https and multiple paths."""
-        alt_urls = self._alt_base_urls()
-        last_error = ""
-        for base in alt_urls:
-            login_paths = ["login", "panel/login"]
-            for path in login_paths:
-                url = f"{base}/{path.lstrip('/')}"
-                # Form data (standard)
-                try:
-                    async with session.post(
-                        url,
-                        data={"username": self.username, "password": self.password},
-                    ) as resp:
-                        if resp.status == 200:
-                            body = await resp.json(content_type=None)
-                            if body.get("success"):
-                                self.base_url = base
-                                return
-                            last_error = f"{body.get('msg', 'wrong credentials')}"
-                        elif resp.status == 404:
-                            last_error = f"HTTP 404 at {url}"
-                        else:
-                            last_error = f"HTTP {resp.status}"
-                except aiohttp.ClientError as exc:
-                    last_error = f"{exc.__class__.__name__}: {exc}"
-                    continue
-                # JSON body (newer 3X-UI builds)
-                try:
-                    async with session.post(
-                        url,
-                        json={"username": self.username, "password": self.password},
-                    ) as resp:
-                        if resp.status == 200:
-                            body = await resp.json(content_type=None)
-                            if body.get("success"):
-                                self.base_url = base
-                                return
-                except aiohttp.ClientError:
+        """Login to 3X-UI panel with CSRF token support (v3.x compatible)."""
+        base = self.base_url
+        # Step 1: establish session (get session cookie)
+        try:
+            async with session.get(f"{base}/") as resp:
+                if resp.status == 404:
+                    raise XUIError(
+                        f"HTTP 404 — панель не найдена по адресу {base}. "
+                        "Проверьте секретный путь (URI Path)."
+                    )
+        except aiohttp.ClientError as exc:
+            raise XUIError(f"Не удалось подключиться к {base}: {exc}") from exc
+
+        # Step 2: get CSRF token (required for 3X-UI v2.4+/v3.x)
+        csrf_token = await self._get_csrf_token(session, base)
+
+        # Step 3: login with CSRF token
+        headers: dict[str, str] = {
+            "X-Requested-With": "XMLHttpRequest",
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        }
+        if csrf_token:
+            headers["X-CSRF-Token"] = csrf_token
+
+        login_url = f"{base}/login"
+        try:
+            async with session.post(
+                login_url,
+                data=f"username={self.username}&password={self.password}",
+                headers=headers,
+            ) as resp:
+                if resp.status == 200:
+                    body = await resp.json(content_type=None)
+                    if body.get("success"):
+                        return
+                    raise XUIError(
+                        f"Неверный логин или пароль: {body.get('msg', '')}"
+                    )
+                elif resp.status == 403:
+                    # Might be old version without CSRF — try without token
                     pass
-        raise XUIError(f"login failed: {last_error}")
+                else:
+                    raise XUIError(f"login HTTP {resp.status}")
+        except aiohttp.ClientError as exc:
+            raise XUIError(f"login error: {exc}") from exc
+
+        # Fallback: try without CSRF (older 3X-UI versions)
+        try:
+            async with session.post(
+                login_url,
+                data={"username": self.username, "password": self.password},
+            ) as resp:
+                if resp.status == 200:
+                    body = await resp.json(content_type=None)
+                    if body.get("success"):
+                        return
+                    raise XUIError(
+                        f"Неверный логин или пароль: {body.get('msg', '')}"
+                    )
+                raise XUIError(f"login failed: HTTP {resp.status}")
+        except aiohttp.ClientError as exc:
+            raise XUIError(f"login error: {exc}") from exc
 
     async def _api(
         self,
@@ -160,8 +140,18 @@ class XUIService:
         *,
         json_body: dict | None = None,
     ) -> dict:
-        async with session.request(method, self._url(path), json=json_body) as resp:
+        headers: dict[str, str] = {"X-Requested-With": "XMLHttpRequest"}
+        # For non-GET requests, include CSRF token
+        if method.upper() != "GET":
+            csrf = await self._get_csrf_token(session, self.base_url)
+            if csrf:
+                headers["X-CSRF-Token"] = csrf
+        async with session.request(
+            method, self._url(path), json=json_body, headers=headers
+        ) as resp:
             text = await resp.text()
+            if resp.status == 403:
+                raise XUIError(f"{path} — доступ запрещён (403). Попробуйте переподключить сервер.")
             if resp.status != 200:
                 raise XUIError(f"{path} HTTP {resp.status}: {text[:200]}")
             body = json.loads(text)
