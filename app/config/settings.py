@@ -1,0 +1,53 @@
+"""Application configuration loaded from environment variables."""
+
+from __future__ import annotations
+
+from pydantic import field_validator
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    # Telegram
+    bot_token: str = ""
+    admin_ids: list[int] = []
+    webhook_url: str = ""
+
+    @field_validator("admin_ids", mode="before")
+    @classmethod
+    def parse_admin_ids(cls, v: object) -> list[int]:
+        if isinstance(v, list):
+            return [int(x) for x in v]
+        if isinstance(v, int):
+            return [v]
+        if isinstance(v, str):
+            return [int(x.strip()) for x in v.split(",") if x.strip()]
+        return []
+
+    # Database
+    database_url: str = "postgresql+asyncpg://vpn_bot:vpn_bot_secret@postgres:5432/vpn_shop"
+
+    # Redis
+    redis_url: str = "redis://redis:6379/0"
+
+    # ЮKassa
+    yookassa_shop_id: str = ""
+    yookassa_secret_key: str = ""
+    yookassa_webhook_secret: str = ""
+    payment_provider_token: str = ""
+
+    # 3X-UI
+    xui_flow: str = "xtls-rprx-vision"
+    xui_verify_ssl: bool = False
+
+    # API
+    api_host: str = "0.0.0.0"
+    api_port: int = 8080
+
+    # Bot appearance defaults
+    service_name: str = "VPN SERVICE"
+    support_username: str = "@support"
+
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
+
+
+settings = Settings()
