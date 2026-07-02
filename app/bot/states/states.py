@@ -67,3 +67,22 @@ class GiftKey(StatesGroup):
 class ExtendSub(StatesGroup):
     user_id = State()
     days = State()
+
+
+class EditTariffField(StatesGroup):
+    tariff_id = State()
+    field = State()
+    value = State()
+
+
+class BlockUser(StatesGroup):
+    user_id = State()
+
+
+class ExtendUserSub(StatesGroup):
+    user_id = State()
+    days = State()
+
+
+class NotifySettings(StatesGroup):
+    days = State()

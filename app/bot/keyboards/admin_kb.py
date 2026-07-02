@@ -21,6 +21,8 @@ def admin_menu() -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="📢 Рассылка", callback_data="adm_mailing"))
     kb.row(InlineKeyboardButton(text="🎨 Кастомизация", callback_data="adm_customize"))
     kb.row(InlineKeyboardButton(text="📝 Инструкция", callback_data="adm_instruction"))
+    kb.row(InlineKeyboardButton(text="🔔 Уведомления", callback_data="adm_notify"))
+    kb.row(InlineKeyboardButton(text="📤 Экспорт CSV", callback_data="adm_export"))
     kb.row(InlineKeyboardButton(text="⚙️ Настройки", callback_data="adm_settings"))
     return kb.as_markup()
 
@@ -74,10 +76,55 @@ def tariffs_menu(tariffs: list[Tariff]) -> InlineKeyboardMarkup:
 
 def tariff_actions(tariff_id: int) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="✏️ Изменить цену", callback_data=f"adm_t_price:{tariff_id}"))
-    kb.row(InlineKeyboardButton(text="✏️ Изменить срок", callback_data=f"adm_t_days:{tariff_id}"))
-    kb.row(InlineKeyboardButton(text="🗑 Удалить", callback_data=f"adm_t_del:{tariff_id}"))
+    kb.row(InlineKeyboardButton(text="✏️ Название", callback_data=f"adm_t_name:{tariff_id}"))
+    kb.row(InlineKeyboardButton(text="✏️ Цена", callback_data=f"adm_t_price:{tariff_id}"))
+    kb.row(InlineKeyboardButton(text="✏️ Срок (дней)", callback_data=f"adm_t_days:{tariff_id}"))
+    kb.row(InlineKeyboardButton(text="✏️ Устройств", callback_data=f"adm_t_devices:{tariff_id}"))
+    kb.row(InlineKeyboardButton(text="✏️ Порядок сортировки", callback_data=f"adm_t_sort:{tariff_id}"))
+    kb.row(InlineKeyboardButton(text="🗑 Деактивировать", callback_data=f"adm_t_del:{tariff_id}"))
     kb.row(InlineKeyboardButton(text="⬅️ Тарифы", callback_data="adm_tariffs"))
+    return kb.as_markup()
+
+
+def client_actions(tg_id: int, is_blocked: bool) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    block_text = "✅ Разблокировать" if is_blocked else "🚫 Заблокировать"
+    block_cb = f"adm_unblock:{tg_id}" if is_blocked else f"adm_block:{tg_id}"
+    kb.row(InlineKeyboardButton(text=block_text, callback_data=block_cb))
+    kb.row(InlineKeyboardButton(text="⏳ Продлить подписку", callback_data=f"adm_extend_sub:{tg_id}"))
+    kb.row(InlineKeyboardButton(text="🎁 Выдать ключ", callback_data=f"adm_gift_to:{tg_id}"))
+    kb.row(InlineKeyboardButton(text="⬅️ Клиенты", callback_data="adm_clients"))
+    return kb.as_markup()
+
+
+def clients_list_kb(page: int, total_pages: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(text="◀️", callback_data=f"clients_page:{page-1}"))
+    nav.append(InlineKeyboardButton(text=f"{page+1}/{total_pages}", callback_data="noop"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton(text="▶️", callback_data=f"clients_page:{page+1}"))
+    kb.row(*nav)
+    kb.row(InlineKeyboardButton(text="🔍 Поиск по ID", callback_data="adm_client_search"))
+    kb.row(InlineKeyboardButton(text="📤 Экспорт CSV", callback_data="adm_export"))
+    kb.row(InlineKeyboardButton(text="⬅️ Админ", callback_data="adm_back"))
+    return kb.as_markup()
+
+
+def notify_settings_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="✏️ Дни уведомлений", callback_data="notify_edit_days"))
+    kb.row(InlineKeyboardButton(text="✅ Включить уведомления", callback_data="notify_on"))
+    kb.row(InlineKeyboardButton(text="❌ Выключить уведомления", callback_data="notify_off"))
+    kb.row(InlineKeyboardButton(text="⬅️ Админ", callback_data="adm_back"))
+    return kb.as_markup()
+
+
+def promo_item_kb(promo_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="❌ Деактивировать", callback_data=f"promo_deactivate:{promo_id}"))
+    kb.row(InlineKeyboardButton(text="⬅️ Промокоды", callback_data="adm_promo"))
     return kb.as_markup()
 
 

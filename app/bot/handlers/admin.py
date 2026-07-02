@@ -14,9 +14,13 @@ from sqlalchemy import func, select
 
 from app.bot.filters.admin import IsAdmin
 from app.bot.keyboards import admin_kb
-from app.bot.states.states import AddServer, AddTariff, Customize, Mailing, AddPromo, EditInstruction, GiftKey
+from app.bot.states.states import (
+    AddServer, AddTariff, Customize, Mailing,
+    AddPromo, EditInstruction, GiftKey,
+    EditTariffField, BlockUser, ExtendUserSub, NotifySettings,
+)
 from app.database.database import async_session
-from app.database.models import Payment, Server, Setting, Subscription, Tariff, User
+from app.database.models import Payment, PromoCode, Server, Setting, Subscription, Tariff, User
 from app.services.mailing import broadcast, get_target_users
 from app.services.xui import XUIError, XUIService
 
@@ -436,36 +440,7 @@ async def cb_clients(call: CallbackQuery) -> None:
     await call.answer()
 
 
-# ================================================================= STATS
-@router.callback_query(F.data == "adm_stats")
-async def cb_stats(call: CallbackQuery) -> None:
-    async with async_session() as session:
-        total_users = (await session.execute(select(func.count()).select_from(User))).scalar() or 0
-        active_subs = (
-            await session.execute(
-                select(func.count()).select_from(Subscription).where(Subscription.is_active.is_(True))
-            )
-        ).scalar() or 0
-        total_income = (
-            await session.execute(
-                select(func.sum(Payment.amount)).where(Payment.status == "paid")
-            )
-        ).scalar() or 0
-        total_servers = (
-            await session.execute(
-                select(func.count()).select_from(Server).where(Server.is_active.is_(True))
-            )
-        ).scalar() or 0
-
-    text = (
-        f"📊 <b>Статистика</b>\n\n"
-        f"👥 Всего клиентов: {total_users}\n"
-        f"🟢 Активные подписки: {active_subs}\n"
-        f"💰 Доход: {int(total_income)}₽\n"
-        f"📡 Серверов: {total_servers}"
-    )
-    await call.message.edit_text(text, reply_markup=admin_kb.admin_menu())  # type: ignore[union-attr]
-    await call.answer()
+# ================================================================= STATS (see full version at bottom of file)
 
 
 # ================================================================= MAILING
@@ -1253,3 +1228,444 @@ async def instruction_save(message: Message, state: FSMContext) -> None:
         "✅ Инструкция сохранена!",
         reply_markup=admin_kb.instruction_menu(),
     )
+
+
+# ================================================================= CLIENTS LIST + SEARCH
+@router.callback_query(F.data == "adm_clients")
+async def cb_clients(call: CallbackQuery) -> None:
+    await _show_clients_page(call, 0)
+
+
+@router.callback_query(F.data.startswith("clients_page:"))
+async def cb_clients_page(call: CallbackQuery) -> None:
+    page = int(call.data.split(":")[1])
+    await _show_clients_page(call, page)
+
+
+async def _show_clients_page(call: CallbackQuery, page: int) -> None:
+    per_page = 10
+    async with async_session() as session:
+        total = (await session.execute(select(func.count()).select_from(User))).scalar() or 0
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        result = await session.execute(
+            select(User).order_by(User.created_at.desc()).offset(page * per_page).limit(per_page)
+        )
+        users = list(result.scalars().all())
+
+    lines = [f"👥 <b>Клиенты</b> (стр. {page+1}/{total_pages}, всего {total})\n"]
+    for u in users:
+        status = "🚫" if u.is_blocked else "✅"
+        uname = f"@{u.username}" if u.username else f"ID:{u.telegram_id}"
+        lines.append(f"{status} <code>{u.telegram_id}</code> — {html.escape(uname)}")
+
+    await call.message.edit_text(  # type: ignore[union-attr]
+        "\n".join(lines),
+        reply_markup=admin_kb.clients_list_kb(page, total_pages),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "adm_client_search")
+async def cb_client_search(call: CallbackQuery, state: FSMContext) -> None:
+    from app.bot.states.states import BlockUser
+    await state.set_state("client_search")
+    await call.message.edit_text(  # type: ignore[union-attr]
+        "🔍 Введите Telegram ID пользователя:",
+        reply_markup=admin_kb.cancel_kb(),
+    )
+    await call.answer()
+
+
+@router.message(F.text, F.func(lambda _: True))
+async def handle_client_search(message: Message, state: FSMContext) -> None:
+    current = await state.get_state()
+    if current != "client_search":
+        return
+    await state.clear()
+    try:
+        tg_id = int(message.text.strip())  # type: ignore[union-attr]
+    except (ValueError, AttributeError):
+        await message.answer("Введите числовой ID.")
+        return
+    await _show_client_card(message, tg_id)
+
+
+async def _show_client_card(obj, tg_id: int) -> None:
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.telegram_id == tg_id))
+        user = result.scalar_one_or_none()
+        if not user:
+            if hasattr(obj, "answer"):
+                await obj.answer("Пользователь не найден.")
+            else:
+                await obj.message.edit_text("Пользователь не найден.", reply_markup=admin_kb.cancel_kb())
+            return
+
+        subs_res = await session.execute(
+            select(Subscription).where(Subscription.user_id == user.id, Subscription.is_active.is_(True))
+        )
+        active_subs = list(subs_res.scalars().all())
+        pmts_res = await session.execute(
+            select(func.count(), func.sum(Payment.amount)).where(
+                Payment.user_id == user.id, Payment.status == "paid"
+            )
+        )
+        pmt_row = pmts_res.one()
+        pmt_count = pmt_row[0] or 0
+        pmt_total = int(pmt_row[1] or 0)
+
+    uname = f"@{user.username}" if user.username else "—"
+    reg = user.created_at.strftime("%d.%m.%Y") if user.created_at else "—"
+    status = "🚫 Заблокирован" if user.is_blocked else "✅ Активен"
+
+    sub_lines = []
+    for s in active_subs:
+        sub_lines.append(f"  🔑 до {s.expire_date.strftime('%d.%m.%Y')}")
+
+    text = (
+        f"👤 <b>Карточка клиента</b>\n\n"
+        f"🆔 ID: <code>{user.telegram_id}</code>\n"
+        f"👤 Имя: {html.escape(user.full_name or '—')}\n"
+        f"📱 Username: {html.escape(uname)}\n"
+        f"📅 Регистрация: {reg}\n"
+        f"⚡ Статус: {status}\n"
+        f"⭐ Бонусных дней: {user.bonus_days}\n\n"
+        f"🔑 Активных подписок: {len(active_subs)}\n"
+        + ("\n".join(sub_lines) + "\n" if sub_lines else "") +
+        f"\n💳 Платежей: {pmt_count} на {pmt_total}₽"
+    )
+    kb = admin_kb.client_actions(user.telegram_id, user.is_blocked)
+    if hasattr(obj, "answer"):
+        await obj.answer(text, reply_markup=kb)
+    else:
+        await obj.message.edit_text(text, reply_markup=kb)
+
+
+# ---- Block / Unblock
+@router.callback_query(F.data.startswith("adm_block:"))
+async def cb_block_user(call: CallbackQuery) -> None:
+    tg_id = int(call.data.split(":")[1])
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.telegram_id == tg_id))
+        user = result.scalar_one_or_none()
+        if user:
+            user.is_blocked = True
+            await session.commit()
+    await call.answer("🚫 Пользователь заблокирован.", show_alert=True)
+    await _show_client_card(call, tg_id)
+
+
+@router.callback_query(F.data.startswith("adm_unblock:"))
+async def cb_unblock_user(call: CallbackQuery) -> None:
+    tg_id = int(call.data.split(":")[1])
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.telegram_id == tg_id))
+        user = result.scalar_one_or_none()
+        if user:
+            user.is_blocked = False
+            await session.commit()
+    await call.answer("✅ Пользователь разблокирован.", show_alert=True)
+    await _show_client_card(call, tg_id)
+
+
+# ---- Extend user subscription
+@router.callback_query(F.data.startswith("adm_extend_sub:"))
+async def cb_extend_sub_start(call: CallbackQuery, state: FSMContext) -> None:
+    tg_id = int(call.data.split(":")[1])
+    await state.set_state(ExtendUserSub.days)
+    await state.update_data(user_id=tg_id)
+    await call.message.edit_text(  # type: ignore[union-attr]
+        f"⏳ Продление подписки для <code>{tg_id}</code>\n\nВведите количество дней:",
+        reply_markup=admin_kb.cancel_kb(),
+    )
+    await call.answer()
+
+
+@router.message(ExtendUserSub.days)
+async def cb_extend_sub_days(message: Message, state: FSMContext) -> None:
+    try:
+        days = int(message.text.strip())  # type: ignore[union-attr]
+    except (ValueError, AttributeError):
+        await message.answer("Введите число.")
+        return
+    data = await state.get_data()
+    await state.clear()
+    tg_id = data["user_id"]
+
+    from datetime import timedelta
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.telegram_id == tg_id))
+        user = result.scalar_one_or_none()
+        if not user:
+            await message.answer("Пользователь не найден.")
+            return
+        subs_res = await session.execute(
+            select(Subscription).where(
+                Subscription.user_id == user.id, Subscription.is_active.is_(True)
+            )
+        )
+        subs = list(subs_res.scalars().all())
+        if not subs:
+            await message.answer("У пользователя нет активных подписок.")
+            return
+        for sub in subs:
+            sub.expire_date = sub.expire_date + timedelta(days=days)
+        await session.commit()
+
+    await message.answer(f"✅ Подписка продлена на {days} дней для пользователя <code>{tg_id}</code>!")
+
+
+# ---- Gift to specific user
+@router.callback_query(F.data.startswith("adm_gift_to:"))
+async def cb_gift_to(call: CallbackQuery, state: FSMContext) -> None:
+    tg_id = int(call.data.split(":")[1])
+    await state.set_state(GiftKey.days)
+    await state.update_data(user_id=tg_id)
+    await call.message.edit_text(  # type: ignore[union-attr]
+        f"🎁 Выдать ключ пользователю <code>{tg_id}</code>\n\nВведите количество дней:",
+        reply_markup=admin_kb.cancel_kb(),
+    )
+    await call.answer()
+
+
+# ================================================================= TARIFF EDIT (name, devices, sort)
+@router.callback_query(F.data.startswith("adm_t_name:"))
+async def cb_tariff_edit_name(call: CallbackQuery, state: FSMContext) -> None:
+    t_id = int(call.data.split(":")[1])
+    await state.set_state(EditTariffField.value)
+    await state.update_data(tariff_id=t_id, field="name")
+    await call.message.edit_text(  # type: ignore[union-attr]
+        "✏️ Введите новое название тарифа:",
+        reply_markup=admin_kb.cancel_kb(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("adm_t_devices:"))
+async def cb_tariff_edit_devices(call: CallbackQuery, state: FSMContext) -> None:
+    t_id = int(call.data.split(":")[1])
+    await state.set_state(EditTariffField.value)
+    await state.update_data(tariff_id=t_id, field="devices")
+    await call.message.edit_text(  # type: ignore[union-attr]
+        "✏️ Введите новый лимит устройств:",
+        reply_markup=admin_kb.cancel_kb(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("adm_t_sort:"))
+async def cb_tariff_edit_sort(call: CallbackQuery, state: FSMContext) -> None:
+    t_id = int(call.data.split(":")[1])
+    await state.set_state(EditTariffField.value)
+    await state.update_data(tariff_id=t_id, field="sort_order")
+    await call.message.edit_text(  # type: ignore[union-attr]
+        "✏️ Введите порядок сортировки (меньше = выше в списке):",
+        reply_markup=admin_kb.cancel_kb(),
+    )
+    await call.answer()
+
+
+@router.message(EditTariffField.value)
+async def cb_tariff_field_save(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    await state.clear()
+    t_id = data["tariff_id"]
+    field = data["field"]
+    value = message.text.strip() if message.text else ""
+
+    async with async_session() as session:
+        tariff = await session.get(Tariff, t_id)
+        if not tariff:
+            await message.answer("Тариф не найден.")
+            return
+        if field == "name":
+            tariff.name = value
+        elif field == "devices":
+            if not value.isdigit():
+                await message.answer("Введите число.")
+                return
+            tariff.devices = int(value)
+        elif field == "sort_order":
+            if not value.isdigit():
+                await message.answer("Введите число.")
+                return
+            tariff.sort_order = int(value)
+        await session.commit()
+        await message.answer(
+            f"✅ Тариф обновлён!\n\n"
+            f"<b>{html.escape(tariff.name)}</b>\n"
+            f"Цена: {int(tariff.price)}₽ | Дней: {tariff.days} | Устройств: {tariff.devices}",
+            reply_markup=admin_kb.tariff_actions(t_id),
+        )
+
+
+# ================================================================= NOTIFICATIONS SETTINGS
+@router.callback_query(F.data == "adm_notify")
+async def cb_notify_settings(call: CallbackQuery) -> None:
+    async with async_session() as session:
+        enabled = await _get_setting(session, "notify_enabled", "true")
+        days_str = await _get_setting(session, "notify_days", "7,3,1")
+
+    status = "✅ Включены" if enabled == "true" else "❌ Выключены"
+    text = (
+        f"🔔 <b>Настройки уведомлений</b>\n\n"
+        f"Статус: {status}\n"
+        f"Дни для уведомлений: <b>{days_str}</b>\n\n"
+        f"(клиенты получают уведомления за указанное кол-во дней до конца подписки)"
+    )
+    await call.message.edit_text(text, reply_markup=admin_kb.notify_settings_kb())  # type: ignore[union-attr]
+    await call.answer()
+
+
+@router.callback_query(F.data == "notify_on")
+async def cb_notify_on(call: CallbackQuery) -> None:
+    async with async_session() as session:
+        await _set_setting(session, "notify_enabled", "true")
+    await call.answer("✅ Уведомления включены!", show_alert=True)
+    await cb_notify_settings(call)
+
+
+@router.callback_query(F.data == "notify_off")
+async def cb_notify_off(call: CallbackQuery) -> None:
+    async with async_session() as session:
+        await _set_setting(session, "notify_enabled", "false")
+    await call.answer("❌ Уведомления выключены!", show_alert=True)
+    await cb_notify_settings(call)
+
+
+@router.callback_query(F.data == "notify_edit_days")
+async def cb_notify_edit_days(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(NotifySettings.days)
+    await call.message.edit_text(  # type: ignore[union-attr]
+        "🔔 Введите дни для уведомлений через запятую\n"
+        "Например: <code>7,3,1</code>",
+        reply_markup=admin_kb.cancel_kb(),
+    )
+    await call.answer()
+
+
+@router.message(NotifySettings.days)
+async def cb_notify_days_save(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    value = message.text.strip() if message.text else "7,3,1"
+    async with async_session() as session:
+        await _set_setting(session, "notify_days", value)
+    await message.answer(
+        f"✅ Дни уведомлений обновлены: <b>{html.escape(value)}</b>",
+        reply_markup=admin_kb.notify_settings_kb(),
+    )
+
+
+# ================================================================= PROMO DEACTIVATE
+@router.callback_query(F.data.startswith("promo_deactivate:"))
+async def cb_promo_deactivate(call: CallbackQuery) -> None:
+    from app.database.models import PromoCode
+    promo_id = int(call.data.split(":")[1])
+    async with async_session() as session:
+        promo = await session.get(PromoCode, promo_id)
+        if promo:
+            promo.is_active = False
+            await session.commit()
+    await call.answer("❌ Промокод деактивирован.", show_alert=True)
+    await cb_promo_list(call)
+
+
+# ================================================================= EXPORT CSV
+@router.callback_query(F.data == "adm_export")
+async def cb_export_csv(call: CallbackQuery, bot: Bot) -> None:
+    import csv
+    import io
+    from aiogram.types import BufferedInputFile
+
+    async with async_session() as session:
+        result = await session.execute(select(User).order_by(User.created_at.desc()))
+        users = list(result.scalars().all())
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["ID", "Telegram ID", "Имя", "Username", "Регистрация", "Бонусов", "Заблокирован"])
+
+        for u in users:
+            writer.writerow([
+                u.id,
+                u.telegram_id,
+                u.full_name or "",
+                u.username or "",
+                u.created_at.strftime("%d.%m.%Y %H:%M") if u.created_at else "",
+                u.bonus_days,
+                "Да" if u.is_blocked else "Нет",
+            ])
+
+    csv_bytes = output.getvalue().encode("utf-8-sig")
+    await bot.send_document(
+        call.from_user.id,  # type: ignore[union-attr]
+        BufferedInputFile(csv_bytes, filename="users_export.csv"),
+        caption=f"📤 Экспорт пользователей — {len(users)} чел.",
+    )
+    await call.answer("✅ CSV отправлен!", show_alert=True)
+
+
+# ================================================================= TOP CLIENTS in STATS
+@router.callback_query(F.data == "adm_stats")
+async def cb_stats(call: CallbackQuery) -> None:
+    from sqlalchemy import desc
+    async with async_session() as session:
+        total_users = (await session.execute(select(func.count()).select_from(User))).scalar() or 0
+        active_subs = (await session.execute(
+            select(func.count()).select_from(Subscription).where(Subscription.is_active.is_(True))
+        )).scalar() or 0
+        total_income = (await session.execute(
+            select(func.sum(Payment.amount)).where(Payment.status == "paid")
+        )).scalar() or 0
+        total_servers = (await session.execute(
+            select(func.count()).select_from(Server).where(Server.is_active.is_(True))
+        )).scalar() or 0
+        blocked_users = (await session.execute(
+            select(func.count()).select_from(User).where(User.is_blocked.is_(True))
+        )).scalar() or 0
+        total_promos_used = (await session.execute(
+            select(func.sum(PromoCode.used_count)).select_from(PromoCode)
+        )).scalar() or 0
+
+        # Топ 5 клиентов
+        top_res = await session.execute(
+            select(User.telegram_id, User.username, func.sum(Payment.amount).label("total"))
+            .join(Payment, Payment.user_id == User.id)
+            .where(Payment.status == "paid")
+            .group_by(User.id)
+            .order_by(desc("total"))
+            .limit(5)
+        )
+        top_clients = top_res.all()
+
+        # Нагрузка серверов
+        srv_res = await session.execute(
+            select(Server.name, func.count(Subscription.id).label("cnt"))
+            .outerjoin(Subscription, (Subscription.server_id == Server.id) & Subscription.is_active.is_(True))
+            .group_by(Server.id)
+            .order_by(desc("cnt"))
+        )
+        server_loads = srv_res.all()
+
+    top_lines = []
+    for i, (tg_id, uname, total) in enumerate(top_clients, 1):
+        name = f"@{uname}" if uname else f"ID:{tg_id}"
+        top_lines.append(f"  {i}. {html.escape(name)} — {int(total)}₽")
+
+    srv_lines = []
+    for srv_name, cnt in server_loads:
+        srv_lines.append(f"  📡 {html.escape(srv_name)}: {cnt} клиентов")
+
+    text = (
+        f"📊 <b>Статистика</b>\n\n"
+        f"👥 Всего пользователей: <b>{total_users}</b>\n"
+        f"🚫 Заблокировано: <b>{blocked_users}</b>\n"
+        f"🟢 Активных подписок: <b>{active_subs}</b>\n"
+        f"💰 Общий доход: <b>{int(total_income)}₽</b>\n"
+        f"📡 Активных серверов: <b>{total_servers}</b>\n"
+        f"🎁 Промокодов использовано: <b>{int(total_promos_used)}</b>\n\n"
+        f"🏆 <b>Топ клиентов:</b>\n" + ("\n".join(top_lines) if top_lines else "  —") + "\n\n"
+        f"🖥️ <b>Нагрузка серверов:</b>\n" + ("\n".join(srv_lines) if srv_lines else "  —")
+    )
+    await call.message.edit_text(text, reply_markup=admin_kb.admin_menu())  # type: ignore[union-attr]
+    await call.answer()
