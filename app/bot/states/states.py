@@ -46,3 +46,24 @@ class Customize(StatesGroup):
     phone = State()
     trial_days = State()
     channel_url = State()
+
+
+class AddPromo(StatesGroup):
+    code = State()
+    discount = State()
+    days = State()
+    uses = State()
+
+
+class EditInstruction(StatesGroup):
+    text = State()
+
+
+class GiftKey(StatesGroup):
+    user_id = State()
+    days = State()
+
+
+class ExtendSub(StatesGroup):
+    user_id = State()
+    days = State()

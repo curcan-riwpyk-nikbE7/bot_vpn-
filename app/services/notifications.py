@@ -16,34 +16,46 @@ logger = logging.getLogger(__name__)
 
 
 async def check_expiring_subscriptions(bot: Bot) -> None:
-    """Notify users whose subscriptions expire within 3 days."""
+    """Notify users whose subscriptions expire within 7, 3 or 1 days."""
     now = datetime.now(timezone.utc)
-    soon = now + timedelta(days=3)
+    notify_days = [7, 3, 1]
 
     async with async_session() as session:
-        result = await session.execute(
-            select(Subscription)
-            .where(
-                Subscription.is_active.is_(True),
-                Subscription.expire_date > now,
-                Subscription.expire_date <= soon,
-            )
-        )
-        subs = list(result.scalars().all())
-
-        for sub in subs:
-            user = await session.get(User, sub.user_id)
-            if not user:
-                continue
-            days_left = (sub.expire_date - now).days
-            try:
-                await bot.send_message(
-                    user.telegram_id,
-                    f"⏰ Ваша VPN-подписка заканчивается через {days_left} дн.\n"
-                    f"Продлите, чтобы не потерять доступ.",
+        for days in notify_days:
+            window_start = now + timedelta(days=days) - timedelta(hours=1)
+            window_end = now + timedelta(days=days)
+            result = await session.execute(
+                select(Subscription).where(
+                    Subscription.is_active.is_(True),
+                    Subscription.expire_date > window_start,
+                    Subscription.expire_date <= window_end,
                 )
-            except Exception:
-                logger.debug("Failed to notify user %s", user.telegram_id)
+            )
+            subs = list(result.scalars().all())
+            for sub in subs:
+                user = await session.get(User, sub.user_id)
+                if not user:
+                    continue
+                expire_str = sub.expire_date.strftime("%d.%m.%Y")
+                if days == 1:
+                    msg = (
+                        f"🚨 <b>Внимание!</b> Ваша VPN-подписка истекает <b>завтра</b> ({expire_str})!\n"
+                        f"Продлите прямо сейчас, чтобы не потерять доступ. /start"
+                    )
+                elif days == 3:
+                    msg = (
+                        f"⏰ Ваша VPN-подписка заканчивается через <b>3 дня</b> ({expire_str}).\n"
+                        f"Не забудьте продлить! /start"
+                    )
+                else:
+                    msg = (
+                        f"📅 Ваша VPN-подписка заканчивается через <b>7 дней</b> ({expire_str}).\n"
+                        f"Позаботьтесь о продлении заранее! /start"
+                    )
+                try:
+                    await bot.send_message(user.telegram_id, msg)
+                except Exception:
+                    logger.debug("Failed to notify user %s", user.telegram_id)
 
 
 async def deactivate_expired(bot: Bot) -> None:

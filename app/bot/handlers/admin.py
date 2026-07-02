@@ -849,3 +849,414 @@ async def cb_settings(call: CallbackQuery) -> None:
 
     await call.message.edit_text("\n".join(lines), reply_markup=admin_kb.cancel_kb())  # type: ignore[union-attr]
     await call.answer()
+
+
+# ================================================================= ANALYTICS
+@router.callback_query(F.data == "adm_analytics")
+async def cb_analytics(call: CallbackQuery) -> None:
+    await call.message.edit_text(  # type: ignore[union-attr]
+        "📈 <b>Аналитика</b>\n\nВыберите период:",
+        reply_markup=admin_kb.analytics_menu(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("analytics_"))
+async def cb_analytics_period(call: CallbackQuery) -> None:
+    from datetime import datetime, timedelta
+    from sqlalchemy import and_
+
+    period = call.data.split("_")[1]  # type: ignore[union-attr]
+    now = datetime.utcnow()
+
+    if period == "today":
+        since = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        label = "сегодня"
+    elif period == "7d":
+        since = now - timedelta(days=7)
+        label = "за 7 дней"
+    elif period == "30d":
+        since = now - timedelta(days=30)
+        label = "за 30 дней"
+    else:
+        since = datetime(2000, 1, 1)
+        label = "за всё время"
+
+    async with async_session() as session:
+        # Новые пользователи
+        new_users = await session.execute(
+            select(func.count()).select_from(User).where(User.created_at >= since)
+        )
+        new_users_count = new_users.scalar() or 0
+
+        # Новые подписки
+        new_subs = await session.execute(
+            select(func.count()).select_from(Subscription).where(Subscription.created_at >= since)
+        )
+        new_subs_count = new_subs.scalar() or 0
+
+        # Доход
+        income = await session.execute(
+            select(func.sum(Payment.amount)).where(
+                and_(Payment.status == "paid", Payment.created_at >= since)
+            )
+        )
+        income_val = income.scalar() or 0
+
+        # Всего платежей
+        total_pmts = await session.execute(
+            select(func.count()).select_from(Payment).where(Payment.created_at >= since)
+        )
+        total_pmts_count = total_pmts.scalar() or 0
+
+        # Успешных платежей
+        paid_pmts = await session.execute(
+            select(func.count()).select_from(Payment).where(
+                and_(Payment.status == "paid", Payment.created_at >= since)
+            )
+        )
+        paid_pmts_count = paid_pmts.scalar() or 0
+
+        # Активные подписки сейчас
+        active_subs = await session.execute(
+            select(func.count()).select_from(Subscription).where(
+                Subscription.is_active.is_(True)
+            )
+        )
+        active_subs_count = active_subs.scalar() or 0
+
+        # Всего пользователей
+        total_users = await session.execute(select(func.count()).select_from(User))
+        total_users_count = total_users.scalar() or 0
+
+    conversion = round(paid_pmts_count / total_pmts_count * 100, 1) if total_pmts_count > 0 else 0
+
+    text = (
+        f"📈 <b>Аналитика {label}</b>\n\n"
+        f"👥 Новых пользователей: <b>{new_users_count}</b>\n"
+        f"🔑 Новых подписок: <b>{new_subs_count}</b>\n"
+        f"💰 Доход: <b>{int(income_val)}₽</b>\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"💳 Платежей всего: <b>{total_pmts_count}</b>\n"
+        f"✅ Успешных: <b>{paid_pmts_count}</b>\n"
+        f"📊 Конверсия: <b>{conversion}%</b>\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 Всего пользователей: <b>{total_users_count}</b>\n"
+        f"🟢 Активных подписок: <b>{active_subs_count}</b>\n"
+    )
+    await call.message.edit_text(text, reply_markup=admin_kb.analytics_menu())  # type: ignore[union-attr]
+    await call.answer()
+
+
+# ================================================================= PAYMENTS HISTORY
+@router.callback_query(F.data == "adm_payments")
+async def cb_payments(call: CallbackQuery) -> None:
+    await call.message.edit_text(  # type: ignore[union-attr]
+        "💳 <b>История платежей</b>\n\nВыберите фильтр:",
+        reply_markup=admin_kb.payments_menu(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("payments_"))
+async def cb_payments_filter(call: CallbackQuery) -> None:
+    from sqlalchemy import desc
+
+    status_filter = call.data.split("_")[1]  # type: ignore[union-attr]
+    status_map = {
+        "paid": "paid",
+        "pending": "pending",
+        "failed": "canceled",
+        "all": None,
+    }
+    status = status_map.get(status_filter)
+
+    async with async_session() as session:
+        query = select(Payment).order_by(desc(Payment.created_at)).limit(20)
+        if status:
+            query = query.where(Payment.status == status)
+        result = await session.execute(query)
+        payments = list(result.scalars().all())
+
+        lines = ["💳 <b>История платежей</b> (последние 20)\n"]
+        if not payments:
+            lines.append("Платежей не найдено.")
+        for p in payments:
+            user = await session.get(User, p.user_id)
+            username = f"@{user.username}" if user and user.username else f"ID:{p.user_id}"
+            status_emoji = {"paid": "✅", "pending": "⏳", "canceled": "❌"}.get(p.status, "❓")
+            date_str = p.created_at.strftime("%d.%m %H:%M") if p.created_at else "—"
+            lines.append(
+                f"{status_emoji} {date_str} | {html.escape(username)} | "
+                f"<b>{int(p.amount)}₽</b> | {p.provider}"
+            )
+
+    await call.message.edit_text(  # type: ignore[union-attr]
+        "\n".join(lines), reply_markup=admin_kb.payments_menu()
+    )
+    await call.answer()
+
+
+# ================================================================= PROMO CODES
+@router.callback_query(F.data == "adm_promo")
+async def cb_promo(call: CallbackQuery) -> None:
+    await call.message.edit_text(  # type: ignore[union-attr]
+        "🎁 <b>Промокоды</b>", reply_markup=admin_kb.promo_menu()
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "promo_list")
+async def cb_promo_list(call: CallbackQuery) -> None:
+    from app.database.models import PromoCode
+    async with async_session() as session:
+        result = await session.execute(select(PromoCode).order_by(PromoCode.created_at.desc()))
+        promos = list(result.scalars().all())
+
+    if not promos:
+        text = "🎁 <b>Промокоды</b>\n\nПромокодов ещё нет."
+    else:
+        lines = ["🎁 <b>Промокоды</b>\n"]
+        for p in promos:
+            status = "🟢" if p.is_active else "🔴"
+            discount_str = f"{p.discount_percent}% скидка" if p.discount_percent else ""
+            days_str = f"+{p.bonus_days} дней" if p.bonus_days else ""
+            reward = " | ".join(filter(None, [discount_str, days_str]))
+            lines.append(
+                f"{status} <code>{html.escape(p.code)}</code> — {reward} "
+                f"({p.used_count}/{p.max_uses} использований)"
+            )
+        text = "\n".join(lines)
+
+    await call.message.edit_text(text, reply_markup=admin_kb.promo_menu())  # type: ignore[union-attr]
+    await call.answer()
+
+
+@router.callback_query(F.data == "promo_add")
+async def cb_promo_add(call: CallbackQuery, state: FSMContext) -> None:
+    from app.bot.states.states import AddPromo
+    await state.set_state(AddPromo.code)
+    await call.message.edit_text(  # type: ignore[union-attr]
+        "🎁 <b>Создание промокода</b>\n\nШаг 1/3: Введите код (например: SALE20):",
+        reply_markup=admin_kb.cancel_kb(),
+    )
+    await call.answer()
+
+
+@router.message(AddPromo.code)
+async def promo_step_code(message: Message, state: FSMContext) -> None:
+    from app.bot.states.states import AddPromo
+    await state.update_data(code=message.text.strip().upper())
+    await state.set_state(AddPromo.discount)
+    await message.answer(
+        "Шаг 2/3: Скидка в процентах (0 если нет скидки):",
+        reply_markup=admin_kb.cancel_kb(),
+    )
+
+
+@router.message(AddPromo.discount)
+async def promo_step_discount(message: Message, state: FSMContext) -> None:
+    from app.bot.states.states import AddPromo
+    try:
+        discount = int(message.text.strip())
+    except ValueError:
+        await message.answer("Введите число от 0 до 100:")
+        return
+    await state.update_data(discount=discount)
+    await state.set_state(AddPromo.days)
+    await message.answer(
+        "Шаг 3/4: Бонусных дней (0 если не нужно):",
+        reply_markup=admin_kb.cancel_kb(),
+    )
+
+
+@router.message(AddPromo.days)
+async def promo_step_days(message: Message, state: FSMContext) -> None:
+    from app.bot.states.states import AddPromo
+    try:
+        days = int(message.text.strip())
+    except ValueError:
+        await message.answer("Введите число:")
+        return
+    await state.update_data(days=days)
+    await state.set_state(AddPromo.uses)
+    await message.answer(
+        "Шаг 4/4: Максимум использований (например: 100):",
+        reply_markup=admin_kb.cancel_kb(),
+    )
+
+
+@router.message(AddPromo.uses)
+async def promo_step_uses(message: Message, state: FSMContext) -> None:
+    from app.database.models import PromoCode
+    try:
+        uses = int(message.text.strip())
+    except ValueError:
+        await message.answer("Введите число:")
+        return
+    data = await state.get_data()
+    await state.clear()
+
+    async with async_session() as session:
+        promo = PromoCode(
+            code=data["code"],
+            discount_percent=data["discount"],
+            bonus_days=data["days"],
+            max_uses=uses,
+        )
+        session.add(promo)
+        await session.commit()
+
+    await message.answer(
+        f"✅ <b>Промокод создан!</b>\n\n"
+        f"Код: <code>{html.escape(data['code'])}</code>\n"
+        f"Скидка: {data['discount']}%\n"
+        f"Бонус дней: {data['days']}\n"
+        f"Макс. использований: {uses}",
+        reply_markup=admin_kb.promo_menu(),
+    )
+
+
+# ================================================================= GIFT KEY
+@router.callback_query(F.data == "adm_gift")
+async def cb_gift(call: CallbackQuery, state: FSMContext) -> None:
+    from app.bot.states.states import GiftKey
+    await state.set_state(GiftKey.user_id)
+    await call.message.edit_text(  # type: ignore[union-attr]
+        "🎁 <b>Выдать бесплатный ключ</b>\n\nВведите Telegram ID пользователя:",
+        reply_markup=admin_kb.cancel_kb(),
+    )
+    await call.answer()
+
+
+@router.message(GiftKey.user_id)
+async def gift_step_user(message: Message, state: FSMContext) -> None:
+    from app.bot.states.states import GiftKey
+    try:
+        tg_id = int(message.text.strip())
+    except ValueError:
+        await message.answer("Введите числовой ID:")
+        return
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.telegram_id == tg_id))
+        user = result.scalar_one_or_none()
+    if not user:
+        await message.answer("Пользователь не найден.")
+        return
+    await state.update_data(user_id=tg_id)
+    await state.set_state(GiftKey.days)
+    await message.answer(
+        f"Пользователь найден: {html.escape(user.full_name or str(tg_id))}\n\n"
+        f"Введите количество дней для ключа:",
+        reply_markup=admin_kb.cancel_kb(),
+    )
+
+
+@router.message(GiftKey.days)
+async def gift_step_days(message: Message, state: FSMContext, bot: Bot) -> None:
+    from app.services.vpn_generator import generate_qr, generate_vpn_key, select_best_server
+    from aiogram.types import BufferedInputFile
+    try:
+        days = int(message.text.strip())
+    except ValueError:
+        await message.answer("Введите число:")
+        return
+    data = await state.get_data()
+    await state.clear()
+
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.telegram_id == data["user_id"]))
+        user = result.scalar_one_or_none()
+        if not user:
+            await message.answer("Пользователь не найден.")
+            return
+
+        server = await select_best_server(session)
+        if not server:
+            await message.answer("Нет доступных серверов.")
+            return
+
+        class GiftTariff:
+            id = None
+            name = "Подарок"
+            days_val = days
+            devices = 1
+
+        gt = GiftTariff()
+        gt.days = days
+
+        try:
+            sub = await generate_vpn_key(session, user, gt, server)  # type: ignore[arg-type]
+            sub.tariff_id = None
+            await session.commit()
+        except Exception as exc:
+            logger.error("Gift VPN error: %s", exc)
+            await message.answer(f"Ошибка: {exc}")
+            return
+
+    await message.answer(f"✅ Ключ выдан пользователю {data['user_id']} на {days} дней!")
+    try:
+        await bot.send_message(
+            data["user_id"],
+            f"🎁 <b>Вам выдан подарочный VPN!</b>\n\n"
+            f"Срок: {days} дней\n\n"
+            f"Ваш ключ:\n<code>{html.escape(sub.vless_link)}</code>",
+        )
+        qr_buf = generate_qr(sub.vless_link)
+        await bot.send_photo(
+            data["user_id"],
+            BufferedInputFile(qr_buf.read(), filename="vpn_qr.png"),
+            caption="📱 QR-код для подключения",
+        )
+    except Exception:
+        await message.answer("Ключ создан, но не удалось отправить пользователю.")
+
+
+# ================================================================= INSTRUCTION
+@router.callback_query(F.data == "adm_instruction")
+async def cb_instruction(call: CallbackQuery) -> None:
+    async with async_session() as session:
+        text = await _get_setting(session, "connect_instruction", "")
+    preview = html.escape(text[:200]) + "..." if len(text) > 200 else html.escape(text) if text else "Инструкция не задана."
+    await call.message.edit_text(  # type: ignore[union-attr]
+        f"📝 <b>Инструкция по подключению</b>\n\n{preview}",
+        reply_markup=admin_kb.instruction_menu(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "instruction_view")
+async def cb_instruction_view(call: CallbackQuery) -> None:
+    async with async_session() as session:
+        text = await _get_setting(session, "connect_instruction", "")
+    if not text:
+        await call.answer("Инструкция не задана.", show_alert=True)
+        return
+    await call.message.edit_text(  # type: ignore[union-attr]
+        f"📝 <b>Инструкция:</b>\n\n{html.escape(text)}",
+        reply_markup=admin_kb.instruction_menu(),
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "instruction_edit")
+async def cb_instruction_edit(call: CallbackQuery, state: FSMContext) -> None:
+    from app.bot.states.states import EditInstruction
+    await state.set_state(EditInstruction.text)
+    await call.message.edit_text(  # type: ignore[union-attr]
+        "📝 Введите новый текст инструкции по подключению:\n\n"
+        "(Поддерживается HTML: <b>жирный</b>, <i>курсив</i>, <code>код</code>)",
+        reply_markup=admin_kb.cancel_kb(),
+    )
+    await call.answer()
+
+
+@router.message(EditInstruction.text)
+async def instruction_save(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    async with async_session() as session:
+        await _set_setting(session, "connect_instruction", message.text or "")
+    await message.answer(
+        "✅ Инструкция сохранена!",
+        reply_markup=admin_kb.instruction_menu(),
+    )

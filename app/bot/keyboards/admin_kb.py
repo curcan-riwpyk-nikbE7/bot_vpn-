@@ -14,8 +14,13 @@ def admin_menu() -> InlineKeyboardMarkup:
     kb.row(InlineKeyboardButton(text="💰 Тарифы", callback_data="adm_tariffs"))
     kb.row(InlineKeyboardButton(text="👥 Клиенты", callback_data="adm_clients"))
     kb.row(InlineKeyboardButton(text="📊 Статистика", callback_data="adm_stats"))
+    kb.row(InlineKeyboardButton(text="📈 Аналитика", callback_data="adm_analytics"))
+    kb.row(InlineKeyboardButton(text="💳 История платежей", callback_data="adm_payments"))
+    kb.row(InlineKeyboardButton(text="🎁 Промокоды", callback_data="adm_promo"))
+    kb.row(InlineKeyboardButton(text="🎁 Выдать ключ", callback_data="adm_gift"))
     kb.row(InlineKeyboardButton(text="📢 Рассылка", callback_data="adm_mailing"))
     kb.row(InlineKeyboardButton(text="🎨 Кастомизация", callback_data="adm_customize"))
+    kb.row(InlineKeyboardButton(text="📝 Инструкция", callback_data="adm_instruction"))
     kb.row(InlineKeyboardButton(text="⚙️ Настройки", callback_data="adm_settings"))
     return kb.as_markup()
 
@@ -139,4 +144,40 @@ def confirm_kb(action: str) -> InlineKeyboardMarkup:
 def cancel_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="❌ Отмена", callback_data="cancel"))
+    return kb.as_markup()
+
+
+def analytics_menu() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="📅 За сегодня", callback_data="analytics_today"))
+    kb.row(InlineKeyboardButton(text="📅 За 7 дней", callback_data="analytics_7d"))
+    kb.row(InlineKeyboardButton(text="📅 За 30 дней", callback_data="analytics_30d"))
+    kb.row(InlineKeyboardButton(text="📅 За всё время", callback_data="analytics_all"))
+    kb.row(InlineKeyboardButton(text="⬅️ Админ", callback_data="adm_back"))
+    return kb.as_markup()
+
+
+def payments_menu() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="✅ Успешные", callback_data="payments_paid"))
+    kb.row(InlineKeyboardButton(text="⏳ Ожидают", callback_data="payments_pending"))
+    kb.row(InlineKeyboardButton(text="❌ Отклонённые", callback_data="payments_failed"))
+    kb.row(InlineKeyboardButton(text="📋 Все", callback_data="payments_all"))
+    kb.row(InlineKeyboardButton(text="⬅️ Админ", callback_data="adm_back"))
+    return kb.as_markup()
+
+
+def promo_menu() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="➕ Создать промокод", callback_data="promo_add"))
+    kb.row(InlineKeyboardButton(text="📋 Список промокодов", callback_data="promo_list"))
+    kb.row(InlineKeyboardButton(text="⬅️ Админ", callback_data="adm_back"))
+    return kb.as_markup()
+
+
+def instruction_menu() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="✏️ Изменить инструкцию", callback_data="instruction_edit"))
+    kb.row(InlineKeyboardButton(text="👁 Просмотреть", callback_data="instruction_view"))
+    kb.row(InlineKeyboardButton(text="⬅️ Админ", callback_data="adm_back"))
     return kb.as_markup()

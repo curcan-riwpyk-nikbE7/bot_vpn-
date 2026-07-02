@@ -86,6 +86,8 @@ def main_menu_with_channel(has_trial: bool = False, channel_url: str = "") -> In
     kb.row(InlineKeyboardButton(text="💳 Продлить", callback_data="extend_vpn"))
     kb.row(InlineKeyboardButton(text="🎁 Пригласить друга", callback_data="referral"))
     kb.row(InlineKeyboardButton(text="⭐ Бонусы", callback_data="bonuses"))
+    kb.row(InlineKeyboardButton(text="🏷 Ввести промокод", callback_data="enter_promo"))
+    kb.row(InlineKeyboardButton(text="📝 Инструкция", callback_data="instruction"))
     if channel_url:
         kb.row(InlineKeyboardButton(text="📢 Наш канал", url=channel_url))
     kb.row(InlineKeyboardButton(text="🆘 Поддержка", callback_data="support"))
@@ -94,5 +96,14 @@ def main_menu_with_channel(has_trial: bool = False, channel_url: str = "") -> In
 
 def back_main_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="back_main"))
+    return kb.as_markup()
+
+
+def promo_result_kb(has_bonus: bool = False) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    if has_bonus:
+        kb.row(InlineKeyboardButton(text="⭐ Мои бонусы", callback_data="bonuses"))
+    kb.row(InlineKeyboardButton(text="🌍 Купить VPN", callback_data="buy_vpn"))
     kb.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="back_main"))
     return kb.as_markup()

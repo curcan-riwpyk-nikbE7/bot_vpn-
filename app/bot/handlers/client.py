@@ -17,6 +17,7 @@ from app.config.settings import settings
 from app.database.database import async_session
 from app.database.models import Payment, Setting, Subscription, Tariff, User
 from app.services import payments as pay_svc
+from app.database.models import PromoCode
 from app.services.referral import get_referral_count, get_referral_link, register_referral
 from app.services.vpn_generator import generate_qr, generate_vpn_key, select_best_server
 
@@ -632,6 +633,114 @@ async def cb_activate_bonus(call: CallbackQuery, bot: Bot) -> None:
         BufferedInputFile(qr_buf.read(), filename="vpn_qr.png"),
         caption="📱 QR-код для подключения",
     )
+    await call.answer()
+
+
+# ----------------------------------------------------------------- Промокод
+@router.callback_query(F.data == "enter_promo")
+async def cb_enter_promo(call: CallbackQuery, state: FSMContext) -> None:
+    from aiogram.fsm.state import State, StatesGroup
+
+    class PromoState(StatesGroup):
+        waiting = State()
+
+    await state.set_state("promo_waiting")
+    await _safe_edit_or_send(
+        call,
+        "🏷 <b>Введите промокод:</b>",
+        reply_markup=client_kb.back_main_kb(),
+    )
+    await call.answer()
+
+
+@router.message(F.text, F.func(lambda m: True))
+async def handle_promo_input(message: Message, state: FSMContext) -> None:
+    current = await state.get_state()
+    if current != "promo_waiting":
+        return
+    await state.clear()
+
+    code = message.text.strip().upper() if message.text else ""
+    async with async_session() as session:
+        result = await session.execute(
+            select(PromoCode).where(PromoCode.code == code, PromoCode.is_active.is_(True))
+        )
+        promo = result.scalar_one_or_none()
+
+        if not promo:
+            await message.answer(
+                "❌ Промокод не найден или уже не действует.",
+                reply_markup=client_kb.back_main_kb(),
+            )
+            return
+
+        if promo.used_count >= promo.max_uses:
+            await message.answer(
+                "❌ Промокод исчерпан.",
+                reply_markup=client_kb.back_main_kb(),
+            )
+            return
+
+        # Применяем промокод
+        user_res = await session.execute(
+            select(User).where(User.telegram_id == message.from_user.id)  # type: ignore
+        )
+        user = user_res.scalar_one_or_none()
+        if not user:
+            await message.answer("Ошибка.")
+            return
+
+        promo.used_count += 1
+        if promo.used_count >= promo.max_uses:
+            promo.is_active = False
+
+        has_bonus = False
+        lines = ["✅ <b>Промокод активирован!</b>\n"]
+        if promo.discount_percent:
+            lines.append(f"💳 Скидка {promo.discount_percent}% на следующую покупку")
+            # Сохраняем скидку в настройках пользователя
+            await _get_setting(session, f"promo_discount_{user.telegram_id}", "")
+            from app.database.models import Setting
+            disc_key = f"promo_discount_{user.telegram_id}"
+            disc_res = await session.execute(select(Setting).where(Setting.key == disc_key))
+            disc_row = disc_res.scalar_one_or_none()
+            if disc_row:
+                disc_row.value = str(promo.discount_percent)
+            else:
+                session.add(Setting(key=disc_key, value=str(promo.discount_percent)))
+
+        if promo.bonus_days:
+            user.bonus_days += promo.bonus_days
+            lines.append(f"⭐ +{promo.bonus_days} бонусных дней")
+            has_bonus = True
+
+        await session.commit()
+
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=client_kb.promo_result_kb(has_bonus=has_bonus),
+    )
+
+
+# ----------------------------------------------------------------- Инструкция
+@router.callback_query(F.data == "instruction")
+async def cb_instruction_client(call: CallbackQuery) -> None:
+    async with async_session() as session:
+        text = await _get_setting(session, "connect_instruction", "")
+
+    if not text:
+        text = (
+            "📝 <b>Инструкция по подключению</b>\n\n"
+            "1️⃣ Скачайте приложение:\n"
+            "   • iOS: <b>FoXray</b> или <b>Streisand</b>\n"
+            "   • Android: <b>v2rayNG</b> или <b>NekoBox</b>\n"
+            "   • Windows/Mac: <b>Hiddify</b>\n\n"
+            "2️⃣ Скопируйте ваш VLESS-ключ из раздела «Мой VPN»\n\n"
+            "3️⃣ Вставьте ключ в приложение и подключитесь\n\n"
+            "❓ Если возникли проблемы — обратитесь в поддержку"
+        )
+
+    await _safe_edit_or_send(call, text, reply_markup=client_kb.back_main_kb())
     await call.answer()
 
 
