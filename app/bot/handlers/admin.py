@@ -1276,7 +1276,7 @@ async def cb_client_search(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
 
 
-@router.message(F.text)
+@router.message(F.text & ~F.text.startswith("/"))
 async def handle_client_search(message: Message, state: FSMContext) -> None:
     current = await state.get_state()
     if current != "client_search":
