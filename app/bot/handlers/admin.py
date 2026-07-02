@@ -14,7 +14,7 @@ from sqlalchemy import func, select
 
 from app.bot.filters.admin import IsAdmin
 from app.bot.keyboards import admin_kb
-from app.bot.states.states import AddServer, AddTariff, Customize, Mailing
+from app.bot.states.states import AddServer, AddTariff, Customize, Mailing, AddPromo, EditInstruction, GiftKey
 from app.database.database import async_session
 from app.database.models import Payment, Server, Setting, Subscription, Tariff, User
 from app.services.mailing import broadcast, get_target_users
@@ -1034,7 +1034,6 @@ async def cb_promo_list(call: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "promo_add")
 async def cb_promo_add(call: CallbackQuery, state: FSMContext) -> None:
-    from app.bot.states.states import AddPromo
     await state.set_state(AddPromo.code)
     await call.message.edit_text(  # type: ignore[union-attr]
         "🎁 <b>Создание промокода</b>\n\nШаг 1/3: Введите код (например: SALE20):",
@@ -1045,7 +1044,6 @@ async def cb_promo_add(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(AddPromo.code)
 async def promo_step_code(message: Message, state: FSMContext) -> None:
-    from app.bot.states.states import AddPromo
     await state.update_data(code=message.text.strip().upper())
     await state.set_state(AddPromo.discount)
     await message.answer(
@@ -1056,7 +1054,6 @@ async def promo_step_code(message: Message, state: FSMContext) -> None:
 
 @router.message(AddPromo.discount)
 async def promo_step_discount(message: Message, state: FSMContext) -> None:
-    from app.bot.states.states import AddPromo
     try:
         discount = int(message.text.strip())
     except ValueError:
@@ -1072,7 +1069,6 @@ async def promo_step_discount(message: Message, state: FSMContext) -> None:
 
 @router.message(AddPromo.days)
 async def promo_step_days(message: Message, state: FSMContext) -> None:
-    from app.bot.states.states import AddPromo
     try:
         days = int(message.text.strip())
     except ValueError:
@@ -1120,7 +1116,6 @@ async def promo_step_uses(message: Message, state: FSMContext) -> None:
 # ================================================================= GIFT KEY
 @router.callback_query(F.data == "adm_gift")
 async def cb_gift(call: CallbackQuery, state: FSMContext) -> None:
-    from app.bot.states.states import GiftKey
     await state.set_state(GiftKey.user_id)
     await call.message.edit_text(  # type: ignore[union-attr]
         "🎁 <b>Выдать бесплатный ключ</b>\n\nВведите Telegram ID пользователя:",
@@ -1131,7 +1126,6 @@ async def cb_gift(call: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(GiftKey.user_id)
 async def gift_step_user(message: Message, state: FSMContext) -> None:
-    from app.bot.states.states import GiftKey
     try:
         tg_id = int(message.text.strip())
     except ValueError:
@@ -1241,7 +1235,6 @@ async def cb_instruction_view(call: CallbackQuery) -> None:
 
 @router.callback_query(F.data == "instruction_edit")
 async def cb_instruction_edit(call: CallbackQuery, state: FSMContext) -> None:
-    from app.bot.states.states import EditInstruction
     await state.set_state(EditInstruction.text)
     await call.message.edit_text(  # type: ignore[union-attr]
         "📝 Введите новый текст инструкции по подключению:\n\n"
