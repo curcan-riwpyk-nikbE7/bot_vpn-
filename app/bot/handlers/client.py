@@ -141,8 +141,16 @@ async def cb_back_main(call: CallbackQuery, state: FSMContext) -> None:
     async with async_session() as session:
         service_name = await _get_setting(session, "service_name", settings.service_name)
         channel_url = await _get_setting(session, "channel_url", "")
+        trial_enabled = await _get_setting(session, "trial_enabled", "true")
+        user_res = await session.execute(
+            select(User).where(User.telegram_id == call.from_user.id)  # type: ignore[union-attr]
+        )
+        user = user_res.scalar_one_or_none()
+        can_trial = (
+            trial_enabled == "true" and user is not None and await _can_use_trial(session, user)
+        )
     text = f"🔥 <b>{html.escape(service_name)}</b>\n\nВыберите действие:"
-    kb = client_kb.main_menu_with_channel(channel_url=channel_url)
+    kb = client_kb.main_menu_with_channel(has_trial=can_trial, channel_url=channel_url)
     await _safe_edit_or_send(call, text, reply_markup=kb)
     await call.answer()
 
@@ -624,6 +632,74 @@ async def cb_activate_bonus(call: CallbackQuery, bot: Bot) -> None:
         BufferedInputFile(qr_buf.read(), filename="vpn_qr.png"),
         caption="📱 QR-код для подключения",
     )
+    await call.answer()
+
+
+# ----------------------------------------------------------------- Profile (Личный кабинет)
+@router.callback_query(F.data == "profile")
+async def cb_profile(call: CallbackQuery) -> None:
+    async with async_session() as session:
+        user_res = await session.execute(
+            select(User).where(User.telegram_id == call.from_user.id)  # type: ignore[union-attr]
+        )
+        user = user_res.scalar_one_or_none()
+        if not user:
+            await call.answer("Ошибка.", show_alert=True)
+            return
+
+        # Активные подписки
+        subs_res = await session.execute(
+            select(Subscription).where(
+                Subscription.user_id == user.id, Subscription.is_active.is_(True)
+            )
+        )
+        active_subs = list(subs_res.scalars().all())
+
+        # Все подписки (для истории)
+        all_subs_res = await session.execute(
+            select(Subscription).where(Subscription.user_id == user.id)
+        )
+        all_subs = list(all_subs_res.scalars().all())
+
+        # Рефералы
+        ref_count = await get_referral_count(session, user)
+
+        # Пробный период использован?
+        trial_res = await session.execute(
+            select(Subscription).where(
+                Subscription.user_id == user.id,
+                Subscription.tariff_id.is_(None),
+            )
+        )
+        used_trial = trial_res.scalar_one_or_none() is not None
+
+    username_str = f"@{user.username}" if user.username else "—"
+    reg_date = user.created_at.strftime("%d.%m.%Y") if user.created_at else "—"
+
+    # Ближайшая дата истечения
+    if active_subs:
+        nearest_expire = min(s.expire_date for s in active_subs)
+        expire_str = nearest_expire.strftime("%d.%m.%Y")
+    else:
+        expire_str = "нет активных"
+
+    text = (
+        f"👤 <b>Личный кабинет</b>\n\n"
+        f"🆔 Ваш ID: <code>{user.telegram_id}</code>\n"
+        f"👤 Имя: {html.escape(user.full_name or '—')}\n"
+        f"📱 Username: {html.escape(username_str)}\n"
+        f"📅 Дата регистрации: {reg_date}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🔑 Активных подписок: <b>{len(active_subs)}</b>\n"
+        f"📦 Всего подписок: <b>{len(all_subs)}</b>\n"
+        f"📆 Ближайшее истечение: <b>{expire_str}</b>\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"👥 Приглашено друзей: <b>{ref_count}</b>\n"
+        f"⭐ Бонусных дней: <b>{user.bonus_days}</b>\n"
+        f"🎁 Пробный период: {'✅ использован' if used_trial else '❌ не использован'}\n"
+    )
+
+    await _safe_edit_or_send(call, text, reply_markup=client_kb.back_main_kb())
     await call.answer()
 
 

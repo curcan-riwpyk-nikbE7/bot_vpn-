@@ -10,6 +10,7 @@ from app.database.models import Tariff
 
 def main_menu(has_trial: bool = False) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="👤 Личный кабинет", callback_data="profile"))
     if has_trial:
         kb.row(InlineKeyboardButton(text="🎁 Пробный период (бесплатно)", callback_data="trial"))
     kb.row(InlineKeyboardButton(text="🌍 Купить VPN", callback_data="buy_vpn"))
@@ -77,6 +78,7 @@ def bonuses_kb(bonus_days: int) -> InlineKeyboardMarkup:
 def main_menu_with_channel(has_trial: bool = False, channel_url: str = "") -> InlineKeyboardMarkup:
     """Main menu with optional channel button."""
     kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="👤 Личный кабинет", callback_data="profile"))
     if has_trial:
         kb.row(InlineKeyboardButton(text="🎁 Пробный период (бесплатно)", callback_data="trial"))
     kb.row(InlineKeyboardButton(text="🌍 Купить VPN", callback_data="buy_vpn"))
