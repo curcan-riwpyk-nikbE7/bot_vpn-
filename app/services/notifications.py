@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 async def check_expiring_subscriptions(bot: Bot) -> None:
     """Notify users whose subscriptions expire within 7, 3 or 1 days."""
-    now = datetime.now(timezone.utc)
+    now = datetime.utcnow()
     notify_days = [7, 3, 1]
 
     async with async_session() as session:
@@ -60,7 +60,7 @@ async def check_expiring_subscriptions(bot: Bot) -> None:
 
 async def deactivate_expired(bot: Bot) -> None:
     """Deactivate expired subscriptions and notify users."""
-    now = datetime.now(timezone.utc)
+    now = datetime.utcnow()
 
     async with async_session() as session:
         result = await session.execute(
