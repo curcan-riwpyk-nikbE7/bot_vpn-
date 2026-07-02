@@ -515,18 +515,63 @@ async def cb_my_vpn(call: CallbackQuery) -> None:
 @router.callback_query(F.data == "extend_vpn")
 async def cb_extend_vpn(call: CallbackQuery) -> None:
     async with async_session() as session:
-        result = await session.execute(
+        # Ищем активные подписки пользователя
+        user_res = await session.execute(
+            select(User).where(User.telegram_id == call.from_user.id)  # type: ignore[union-attr]
+        )
+        user = user_res.scalar_one_or_none()
+        if not user:
+            await call.answer("Ошибка.", show_alert=True)
+            return
+
+        subs_res = await session.execute(
+            select(Subscription).where(
+                Subscription.user_id == user.id,
+                Subscription.is_active.is_(True),
+                Subscription.tariff_id.isnot(None),
+            )
+        )
+        active_subs = list(subs_res.scalars().all())
+
+        if not active_subs:
+            await _safe_edit_or_send(
+                call,
+                "💳 <b>Продление VPN</b>\n\n"
+                "У вас нет активных платных подписок для продления.\n"
+                "Нажмите «Купить VPN» чтобы приобрести подписку.",
+                reply_markup=client_kb.buy_or_back_kb(),
+            )
+            await call.answer()
+            return
+
+        # Собираем тарифы активных подписок
+        tariff_ids = list({s.tariff_id for s in active_subs if s.tariff_id})
+        tariffs_res = await session.execute(
+            select(Tariff).where(Tariff.id.in_(tariff_ids), Tariff.is_active.is_(True))
+        )
+        active_tariffs = list(tariffs_res.scalars().all())
+
+        # Также все доступные тарифы для выбора другого
+        all_tariffs_res = await session.execute(
             select(Tariff).where(Tariff.is_active.is_(True)).order_by(Tariff.sort_order)
         )
-        tariffs = list(result.scalars().all())
+        all_tariffs = list(all_tariffs_res.scalars().all())
 
-    if not tariffs:
-        await call.answer("Тарифы не настроены.", show_alert=True)
-        return
+        # Формируем текст с активными подписками
+        lines = ["💳 <b>Продление VPN</b>\n\n<b>Ваши активные подписки:</b>"]
+        for sub in active_subs:
+            tariff = next((t for t in active_tariffs if t.id == sub.tariff_id), None)
+            tariff_name = tariff.name if tariff else "Неизвестный тариф"
+            expire_str = sub.expire_date.strftime("%d.%m.%Y")
+            lines.append(f"🔑 {tariff_name} — до {expire_str}")
+
+        lines.append("\n<b>Выберите тариф для продления:</b>")
+        text = "\n".join(lines)
+
     await _safe_edit_or_send(
         call,
-        "💳 <b>Продление VPN — выберите тариф:</b>",
-        reply_markup=client_kb.tariffs_menu(tariffs),
+        text,
+        reply_markup=client_kb.tariffs_menu_extend(all_tariffs),
     )
     await call.answer()
 

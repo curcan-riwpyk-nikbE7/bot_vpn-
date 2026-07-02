@@ -31,6 +31,23 @@ def tariffs_menu(tariffs: list[Tariff]) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def tariffs_menu_extend(tariffs: list[Tariff]) -> InlineKeyboardMarkup:
+    """Тарифы для продления — те же тарифы но с пометкой."""
+    kb = InlineKeyboardBuilder()
+    for t in tariffs:
+        label = f"🔄 {t.name} — {int(t.price)}₽ / {t.days} дн."
+        kb.row(InlineKeyboardButton(text=label, callback_data=f"tariff:{t.id}"))
+    kb.row(InlineKeyboardButton(text="⬅️ Назад", callback_data="back_main"))
+    return kb.as_markup()
+
+
+def buy_or_back_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="🌍 Купить VPN", callback_data="buy_vpn"))
+    kb.row(InlineKeyboardButton(text="⬅️ Главное меню", callback_data="back_main"))
+    return kb.as_markup()
+
+
 def payment_method_select(tariff_id: int, has_yookassa: bool, has_phone: bool) -> InlineKeyboardMarkup:
     """Let client choose payment method."""
     kb = InlineKeyboardBuilder()
