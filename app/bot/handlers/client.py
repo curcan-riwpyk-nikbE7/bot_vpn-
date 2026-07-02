@@ -698,7 +698,7 @@ async def cb_enter_promo(call: CallbackQuery, state: FSMContext) -> None:
     await call.answer()
 
 
-@router.message(F.text, F.func(lambda m: True))
+@router.message(F.text)
 async def handle_promo_input(message: Message, state: FSMContext) -> None:
     current = await state.get_state()
     if current != "promo_waiting":
