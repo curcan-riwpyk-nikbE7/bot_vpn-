@@ -20,6 +20,8 @@ class Settings(BaseSettings):
         if isinstance(v, int):
             return [v]
         if isinstance(v, str):
+            # Strip brackets if present: [123,456] -> 123,456
+            v = v.strip().strip("[]")
             return [int(x.strip()) for x in v.split(",") if x.strip()]
         return []
 
